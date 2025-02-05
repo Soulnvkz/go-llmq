@@ -1,2 +1,6 @@
 .vscode
 build
+db-data
+pgadmin-data
+db-conf
+.env
