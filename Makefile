@@ -12,5 +12,5 @@ dbee:
 llm: 
 	cd ./llm && go build -o ../build/llm/llm
 
-app:
-	cd ./app && go build -o ../build/app/app
+server:
+	cd ./server && go build -o ../build/server/server
