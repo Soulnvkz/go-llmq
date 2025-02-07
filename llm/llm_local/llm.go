@@ -2,7 +2,7 @@ package llm_local
 
 /*
 #cgo CFLAGS: -I${SRCDIR}/../deps/llama.cpp/ggml/include -I${SRCDIR}/../deps/llama.cpp/include
-#cgo LDFLAGS: -L${SRCDIR}/../deps/llama.cpp/build/bin -lllama -lggml
+#cgo LDFLAGS: -L${SRCDIR}/../deps/llama.cpp/build/bin -lllama -lggml -lstdc++ -ldl -lm
 #include "llama.h"
 */
 import "C"
@@ -39,7 +39,7 @@ func (llm *LLM) load_model(model_path string) error {
 	}
 
 	model_params := C.llama_model_default_params()
-	model_params.n_gpu_layers = 99 // default max value
+	model_params.n_gpu_layers = 10
 
 	model := C.llama_model_load_from_file(C.CString(model_path), model_params)
 	if model == nil {

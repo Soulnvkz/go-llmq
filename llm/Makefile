@@ -1,0 +1,16 @@
+clean:
+	rm -rf deps/llama.cpp/build
+
+prepare-rocm:
+	HIPCXX="$(hipconfig -l)/clang" HIP_PATH="$(hipconfig -R)" \                 
+		cmake -S ./deps/llama.cpp -B ./deps/llama.cpp/build -DGGML_HIP=ON -DAMDGPU_TARGETS=gfx1030 -DCMAKE_BUILD_TYPE=Release -DLLAMA_CURL=ON 
+
+build-rocm:
+	HIPCXX="$(hipconfig -l)/clang" HIP_PATH="$(hipconfig -R)" \
+		cmake --build ./deps/llama.cpp/build --config Release -j$(nproc)
+
+prepare-cpu:
+	cmake -S ./deps/llama.cpp -B ./deps/llama.cpp/build -DCMAKE_BUILD_TYPE=Release;
+
+build-cpu:
+	cmake --build ./deps/llama.cpp/build --config Release -j $(nproc)

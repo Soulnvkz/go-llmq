@@ -2,6 +2,8 @@ package main
 
 import (
 	"fmt"
+	"log"
+	"os"
 	"sol/llm/llm_local"
 )
 
@@ -37,7 +39,11 @@ func main() {
 		fmt.Print(string(b))
 	}
 
-	model := "models/SAINEMO-reMIX.i1-Q6_K.gguf"
+	model := os.Getenv("MODEL_PATH")
+	if len(model) == 0 {
+		log.Fatal("ENV MODEL_PATH should be specifed")
+	}
+
 	llm := llm_local.NewLLM()
 	llm.Initilize(model)
 	defer llm.Clean()
