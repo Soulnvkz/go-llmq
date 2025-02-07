@@ -35,8 +35,11 @@ func main() {
 	log.Print("Hello, server!")
 
 	router := http.NewServeMux()
-	router.HandleFunc("/api/test", func(w http.ResponseWriter, r *http.Request) {
-		w.Write([]byte("Hello, world!"))
+	router.HandleFunc("/test", func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte("Hello, test!"))
+	})
+	router.HandleFunc("/test1", func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte("Hello, test1!"))
 	})
 
 	server := http.Server{
