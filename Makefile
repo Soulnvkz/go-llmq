@@ -13,4 +13,4 @@ llm:
 	cd ./llm && go build -o ../build/llm/llm
 
 server:
-	cd ./server && go build -o ../build/server/server
+	cd ./server && go build -gcflags=-m -o ../build/server/server

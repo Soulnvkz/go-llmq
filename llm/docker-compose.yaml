@@ -1,0 +1,5 @@
+services:
+  llm:
+    build: .
+    volumes:
+      - /home/sol/programming/ai/models:/app/models

@@ -1,8 +1,8 @@
 package llm_local
 
 /*
-#cgo CFLAGS: -I/home/sol/programming/ai/llama.cpp/ggml/include -I/home/sol/programming/ai/llama.cpp/src -I/home/sol/programming/ai/llama.cpp/include -I/home/sol/programming/ai/llama.cpp/src -I/home/sol/programming/ai/llama.cpp/common
-#cgo LDFLAGS: -L/home/sol/programming/ai/llama.cpp/build/bin -Wl,-rpath=/home/sol/programming/ai/llama.cpp/build/bin -lllama -lggml -lm -lstdc++
+#cgo CFLAGS: -I${SRCDIR}/../deps/llama.cpp/ggml/include -I${SRCDIR}/../deps/llama.cpp/include
+#cgo LDFLAGS: -L${SRCDIR}/../deps/llama.cpp/build/bin -lllama -lggml
 #include "llama.h"
 */
 import "C"
