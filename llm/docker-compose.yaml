@@ -1,5 +1,7 @@
 services:
   llm:
     build: .
+    environment:
+      - MODEL_PATH=/app/models/SAINEMO-reMIX.i1-Q6_K.gguf
     volumes:
       - /home/sol/programming/ai/models:/app/models
