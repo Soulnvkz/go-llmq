@@ -1,14 +1,96 @@
 :root {
+  --white: #ffffff;
+  /* Primary Colors */
+  --primary: #727D73;
+  --primary-dark: #4E564F;
+  --primary-light: #A2B0A5;
+  --primary-hover: #869586;
+
+  /* Accent Colors */
+  --accent: #FF9800; /* Vibrant orange instead of red */
+  --accent-hover: #E68900;
+  --accent-light: #FFC069;
+
+  /* Backgrounds */
+  --bg-light: #F4F7F4;
+  --bg-dark: #1F1F1E;
+  --bg-panel: #E8ECE8;
+  --bg-hover: #DCE1DC;
+
+  /* Buttons */
+  --btn-primary: var(--primary);
+  --btn-primary-hover: var(--primary-hover);
+  --btn-primary-active: #5E675F;
+  --btn-primary-text: #FFFFFF;
+
+  --btn-secondary: var(--accent);
+  --btn-secondary-hover: var(--accent-hover);
+  --btn-secondary-active: #C76F00;
+  --btn-secondary-text: #FFFFFF;
+
+  --btn-disabled: #BFC4BF;
+
+  /* Links */
+  --link: var(--accent);
+  --link-hover: var(--accent-hover);
+  --link-visited: #C76F00;
+
+  /* Inputs */
+  --input-bg: #FFFFFF;
+  --input-border: var(--primary-light);
+  --input-focus: var(--primary-hover);
+
+  /* Messages */
+  --msg-outgoing: var(--accent);
+  --msg-outgoing-bg: #FFE0B2;
+  --msg-outgoing-text: #4D2600;
+
+  --msg-incoming: var(--primary-light);
+  --msg-incoming-bg: var(--bg-light);
+  --msg-incoming-text: var(--bg-dark);
+
+  /* Text */
+  --text-dark: var(--bg-dark);
+  --text-light: var(--bg-light);
+  --text-muted: var(--primary);
+  --text-error: #E04A2D;
+  --text-success: #4CAF50;
+
+  /* Shadows */
+  --shadow-primary: rgba(31, 31, 30, 0.25);
+}
+
+:root {
   font-family: Inter, system-ui, Avenir, Helvetica, Arial, sans-serif;
   line-height: 1.5;
   font-weight: 400;
-
-  color-scheme: light dark;
-  color: rgba(255, 255, 255, 0.87);
-  background-color: #242424;
 
   font-synthesis: none;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }
+
+body {
+  background-color: var(--bg-light);
+  color: var(--text-dark);
+}
+
+/* a {
+  color: var(--link);
+  text-decoration: none;
+}
+
+a:hover {
+  color: var(--link-hover);
+} */
+
+input {
+  background-color: var(--input-bg);
+  border: 1px solid var(--input-border);
+}
+
+input:focus {
+  border-color: var(--input-focus);
+}
+
