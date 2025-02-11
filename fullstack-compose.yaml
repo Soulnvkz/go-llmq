@@ -1,7 +1,7 @@
 services:
   frontend:
     build:
-      context: ./app  # Path to your Vite React app
+      context: ./app
       dockerfile: dev.Dockerfile
     volumes:
       - ./app:/app
@@ -13,7 +13,7 @@ services:
 
   backend:
     build:
-      context: ./server  # Path to your Go server
+      context: ./server
       dockerfile: Dockerfile
     ports:
       - "8080:8080"
