@@ -1,11 +1,13 @@
+import React from "react";
 import style from "./message.module.scss"
 
 interface MessageProps {
-    text: string;
-    isUser: boolean
+    isUser: boolean;
+    text?: string;
+    last?: boolean;
 }
 
-function Message({text, isUser}: MessageProps) {
+const Message = React.forwardRef(function({text, isUser, last = false}: MessageProps, ref: React.Ref<HTMLDivElement>) {
     let messageStyle = `${style.message}`
     if(isUser){
         messageStyle+=` ${style.user}`;
@@ -13,11 +15,20 @@ function Message({text, isUser}: MessageProps) {
         messageStyle+=` ${style.bot}`;
     }
 
+    let stylex = {}
+    if(last) {
+        stylex = {
+            display:"none"
+        }
+    }
+
     return (
-       <div className={messageStyle}>
-            {text}
+       <div ref={ref} style={stylex} className={messageStyle}>
+            <span>{text}</span>
        </div>
     )
-}
+})
+
+
 
 export default Message
