@@ -38,31 +38,31 @@ func main() {
 
 	conn, err := amqp.Dial("amqp://admin:admin@localhost:5672/")
 	if err != nil {
-		log.Panicf("%s: %s", "failed to connect to RabbitMQ", err)
+		log.Panicf("%s, failed to connect to RabbitMQ", err)
 	}
 	defer conn.Close()
 
 	pubConn, err := amqp.Dial("amqp://admin:admin@localhost:5672/")
 	if err != nil {
-		log.Panicf("%s: %s", "failed to connect to RabbitMQ", err)
+		log.Panicf("%s, failed to connect to RabbitMQ", err)
 	}
 	defer pubConn.Close()
 
 	ch, err := conn.Channel()
 	if err != nil {
-		log.Panicf("%s: %s", "failed to create channel", err)
+		log.Panicf("%s, failed to create channel", err)
 	}
 	defer ch.Close()
 
 	cch, err := conn.Channel()
 	if err != nil {
-		log.Panicf("%s: %s", "failed to create channel", err)
+		log.Panicf("%s, failed to create channel", err)
 	}
 	defer cch.Close()
 
 	pubch, err := pubConn.Channel()
 	if err != nil {
-		log.Panicf("%s: %s", "failed to create channel", err)
+		log.Panicf("%s, failed to create channel", err)
 	}
 	defer pubch.Close()
 
@@ -75,7 +75,7 @@ func main() {
 		nil,     // args
 	)
 	if err != nil {
-		log.Panicf("%s: %s", "failed to declare requests queue", err)
+		log.Panicf("%s, failed to declare requests queue", err)
 	}
 
 	qCancel, err := cch.QueueDeclare(
@@ -87,7 +87,7 @@ func main() {
 		nil,            // args
 	)
 	if err != nil {
-		log.Panicf("%s: %s", "failed to declare cancel queue", err)
+		log.Panicf("%s, failed to declare cancel queue", err)
 	}
 
 	requests, err := ch.Consume(
@@ -100,7 +100,7 @@ func main() {
 		nil,    // args
 	)
 	if err != nil {
-		log.Panicf("%s: %s", "failed to init consume proccess", err)
+		log.Panicf("%s, failed to init consume proccess", err)
 	}
 
 	cRequests, err := cch.Consume(
@@ -113,7 +113,7 @@ func main() {
 		nil,          // args
 	)
 	if err != nil {
-		log.Panicf("%s: %s", "failed to init consume proccess", err)
+		log.Panicf("%s, failed to init consume proccess", err)
 	}
 
 	err = ch.Qos(
@@ -121,19 +121,44 @@ func main() {
 		0,     // prefetch size
 		false, // global
 	)
+	if err != nil {
+		log.Panicf("%s, failed to init qos", err)
+	}
 
-	var forever chan struct{}
-	go func() {
-		for {
-			select {
-			case cRequest := <-cRequests:
-				log.Printf("Received a cancel request %s", cRequest.Body)
-				llm.Cancel()
-				cRequest.Ack(false)
+	for {
+		select {
+		case cRequest := <-cRequests:
+			_ = cRequest
+			// TODO: that way doesn't work
+			// go func() {
+			// 	log.Printf("Received a cancel request %s", cRequest.Body)
+			// 	llm.Cancel()
+			// 	cRequest.Ack(false)
+			// }()
 
-			case request := <-requests:
-				go func() {
-					log.Printf("Received a message: %s", request.Body)
+		case request := <-requests:
+			log.Printf("Received a message: %s", request.Body)
+			err = pubch.Publish(
+				"",              // exchange
+				request.ReplyTo, // routing key
+				false,           // mandatory
+				false,           // immediate
+				amqp.Publishing{
+					ContentType:   "text/plain",
+					CorrelationId: request.CorrelationId,
+					Body:          []byte("<start>"),
+				})
+			if err != nil {
+				log.Printf("Error: %s", err)
+			}
+			log.Printf("Publish <start>")
+
+			output := func(b []byte, err error) {
+				if err != nil {
+					log.Printf("Error: %s\n", err)
+					return
+				}
+				if b == nil {
 					err = pubch.Publish(
 						"",              // exchange
 						request.ReplyTo, // routing key
@@ -142,128 +167,103 @@ func main() {
 						amqp.Publishing{
 							ContentType:   "text/plain",
 							CorrelationId: request.CorrelationId,
-							Body:          []byte("<start>"),
+							Body:          []byte("<end>"),
 						})
 					if err != nil {
 						log.Printf("Error: %s", err)
 					}
-					log.Printf("Publish <start>")
+					log.Printf("Publish <end>")
 
-					output := func(b []byte, err error) {
-						if err != nil {
-							log.Printf("Error: %s\n", err)
-							return
-						}
-						if b == nil {
-							err = pubch.Publish(
-								"",              // exchange
-								request.ReplyTo, // routing key
-								false,           // mandatory
-								false,           // immediate
-								amqp.Publishing{
-									ContentType:   "text/plain",
-									CorrelationId: request.CorrelationId,
-									Body:          []byte("<end>"),
-								})
-							if err != nil {
-								log.Printf("Error: %s", err)
-							}
-							log.Printf("Publish <end>")
+					return
+				}
 
-							return
-						}
-
-						err = pubch.Publish(
-							"",              // exchange
-							request.ReplyTo, // routing key
-							false,           // mandatory
-							false,           // immediate
-							amqp.Publishing{
-								ContentType:   "text/plain",
-								CorrelationId: request.CorrelationId,
-								Body:          b,
-							})
-						if err != nil {
-							log.Printf("Error: %s", err)
-						}
-						log.Printf("Publish next")
-					}
-
-					err = llm.Proccess(string(request.Body), output)
-					if err != nil {
-						log.Printf("Error: %s", err)
-					}
-
-					request.Ack(false)
-				}()
+				err = pubch.Publish(
+					"",              // exchange
+					request.ReplyTo, // routing key
+					false,           // mandatory
+					false,           // immediate
+					amqp.Publishing{
+						ContentType:   "text/plain",
+						CorrelationId: request.CorrelationId,
+						Body:          b,
+					})
+				if err != nil {
+					log.Printf("Error: %s", err)
+				}
 			}
+
+			err = llm.Proccess(string(request.Body), output)
+			if err != nil {
+				log.Printf("Error: %s", err)
+			}
+
+			request.Ack(false)
 		}
+	}
 
-		// for request := range requests {
-		// 	log.Printf("Received a message: %s", request.Body)
-		// 	err = pubch.Publish(
-		// 		"",              // exchange
-		// 		request.ReplyTo, // routing key
-		// 		false,           // mandatory
-		// 		false,           // immediate
-		// 		amqp.Publishing{
-		// 			ContentType:   "text/plain",
-		// 			CorrelationId: request.CorrelationId,
-		// 			Body:          []byte("<start>"),
-		// 		})
-		// 	if err != nil {
-		// 		log.Printf("Error: %s", err)
-		// 	}
+	// for request := range requests {
+	// 	log.Printf("Received a message: %s", request.Body)
+	// 	err = pubch.Publish(
+	// 		"",              // exchange
+	// 		request.ReplyTo, // routing key
+	// 		false,           // mandatory
+	// 		false,           // immediate
+	// 		amqp.Publishing{
+	// 			ContentType:   "text/plain",
+	// 			CorrelationId: request.CorrelationId,
+	// 			Body:          []byte("<start>"),
+	// 		})
+	// 	if err != nil {
+	// 		log.Printf("Error: %s", err)
+	// 	}
 
-		// 	output := func(b []byte, err error) {
-		// 		if err != nil {
-		// 			log.Printf("Error: %s\n", err)
-		// 			return
-		// 		}
-		// 		if b == nil {
-		// 			err = pubch.Publish(
-		// 				"",              // exchange
-		// 				request.ReplyTo, // routing key
-		// 				false,           // mandatory
-		// 				false,           // immediate
-		// 				amqp.Publishing{
-		// 					ContentType:   "text/plain",
-		// 					CorrelationId: request.CorrelationId,
-		// 					Body:          []byte("<end>"),
-		// 				})
-		// 			if err != nil {
-		// 				log.Printf("Error: %s", err)
-		// 			}
+	// 	output := func(b []byte, err error) {
+	// 		if err != nil {
+	// 			log.Printf("Error: %s\n", err)
+	// 			return
+	// 		}
+	// 		if b == nil {
+	// 			err = pubch.Publish(
+	// 				"",              // exchange
+	// 				request.ReplyTo, // routing key
+	// 				false,           // mandatory
+	// 				false,           // immediate
+	// 				amqp.Publishing{
+	// 					ContentType:   "text/plain",
+	// 					CorrelationId: request.CorrelationId,
+	// 					Body:          []byte("<end>"),
+	// 				})
+	// 			if err != nil {
+	// 				log.Printf("Error: %s", err)
+	// 			}
 
-		// 			return
-		// 		}
+	// 			return
+	// 		}
 
-		// 		log.Print(string(b))
+	// 		log.Print(string(b))
 
-		// 		err = pubch.Publish(
-		// 			"",              // exchange
-		// 			request.ReplyTo, // routing key
-		// 			false,           // mandatory
-		// 			false,           // immediate
-		// 			amqp.Publishing{
-		// 				ContentType:   "text/plain",
-		// 				CorrelationId: request.CorrelationId,
-		// 				Body:          b,
-		// 			})
-		// 		if err != nil {
-		// 			log.Printf("Error: %s", err)
-		// 		}
-		// 	}
+	// 		err = pubch.Publish(
+	// 			"",              // exchange
+	// 			request.ReplyTo, // routing key
+	// 			false,           // mandatory
+	// 			false,           // immediate
+	// 			amqp.Publishing{
+	// 				ContentType:   "text/plain",
+	// 				CorrelationId: request.CorrelationId,
+	// 				Body:          b,
+	// 			})
+	// 		if err != nil {
+	// 			log.Printf("Error: %s", err)
+	// 		}
+	// 	}
 
-		// 	err = llm.Proccess(string(request.Body), output)
-		// 	if err != nil {
-		// 		log.Printf("Error: %s", err)
-		// 	}
+	// 	err = llm.Proccess(string(request.Body), output)
+	// 	if err != nil {
+	// 		log.Printf("Error: %s", err)
+	// 	}
 
-		// 	request.Ack(false)
-		// }
-	}()
-	<-forever
+	// 	request.Ack(false)
+	// }
 
 	// err = llm.Proccess("Привет. Как тебя зовут? Расскажи историю про грибы в лесу.", output)
 	// if err != nil {
