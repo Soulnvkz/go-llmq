@@ -8,6 +8,7 @@ package llm_local
 import "C"
 
 import (
+	"context"
 	"fmt"
 	"unsafe"
 )
@@ -20,6 +21,8 @@ type LLM struct {
 	n_predict int
 	n_ctx     int
 	n_batch   int
+
+	streamCancel *context.CancelFunc
 }
 
 func NewLLM() *LLM {
@@ -27,6 +30,8 @@ func NewLLM() *LLM {
 		n_predict: 1024,
 		n_ctx:     4096,
 		n_batch:   512,
+
+		streamCancel: nil,
 	}
 }
 
@@ -132,6 +137,12 @@ func (llm *LLM) Clean() error {
 	return nil
 }
 
+func (llm *LLM) Cancel() {
+	if llm.streamCancel != nil {
+		(*llm.streamCancel)()
+	}
+}
+
 func (llm *LLM) Proccess(prompt string, on_next func([]byte, error)) error {
 	n_prompt, prompt_tokens, err := llm.tokenize_promtp(prompt)
 	if err != nil {
@@ -142,41 +153,102 @@ func (llm *LLM) Proccess(prompt string, on_next func([]byte, error)) error {
 	n_decode := 0
 	new_token_id := C.llama_token(0)
 
-	for n_pos := 0; n_pos+int(batch.n_tokens) < int(n_prompt)+llm.n_predict; {
-		// evaluate the current batch with the transformer model
-		if C.llama_decode(llm.ctx, batch) > 0 {
-			on_next(nil, fmt.Errorf("failed to eval current batch"))
+	ctx, cancel := context.WithCancel(context.Background())
+	llm.streamCancel = &cancel
+
+	defer func() {
+		llm.streamCancel = nil
+	}()
+
+	n_pos := 0
+loop:
+	for {
+		select {
+		case <-ctx.Done():
+			on_next(nil, nil)
 			return nil
-		}
-
-		n_pos += int(batch.n_tokens)
-
-		// sample the next token
-		{
-			new_token_id = C.llama_sampler_sample(llm.smpl, llm.ctx, -1)
-
-			// is it an end of generation?
-			if C.llama_vocab_is_eog(llm.vocab, new_token_id) {
-				on_next(nil, nil)
+		default:
+			if n_pos+int(batch.n_tokens) >= int(n_prompt)+llm.n_predict {
+				break loop
+			}
+			// evaluate the current batch with the transformer model
+			if C.llama_decode(llm.ctx, batch) > 0 {
+				on_next(nil, fmt.Errorf("failed to eval current batch"))
 				return nil
 			}
 
-			buf := make([]C.char, 128)
+			n_pos += int(batch.n_tokens)
 
-			n := C.llama_token_to_piece(llm.vocab, new_token_id, &buf[0], C.int(len(buf)), 0, true)
-			if n < 0 {
-				on_next(nil, fmt.Errorf("failed to convert token to piece"))
-				return nil
+			// sample the next token
+			{
+				new_token_id = C.llama_sampler_sample(llm.smpl, llm.ctx, -1)
+
+				// is it an end of generation?
+				if C.llama_vocab_is_eog(llm.vocab, new_token_id) {
+					on_next(nil, nil)
+					return nil
+				}
+
+				buf := make([]C.char, 128)
+
+				n := C.llama_token_to_piece(llm.vocab, new_token_id, &buf[0], C.int(len(buf)), 0, true)
+				if n < 0 {
+					on_next(nil, fmt.Errorf("failed to convert token to piece"))
+					return nil
+				}
+				cstr := (*C.char)(unsafe.Pointer(&buf[0])) // Get pointer to the first element
+				goStr := C.GoString(cstr)
+				on_next([]byte(goStr), nil)
+				// prepare the next batch with the sampled token
+				batch = C.llama_batch_get_one(&new_token_id, 1)
+
+				n_decode += 1
 			}
-			cstr := (*C.char)(unsafe.Pointer(&buf[0])) // Get pointer to the first element
-			goStr := C.GoString(cstr)
-			on_next([]byte(goStr), nil)
-			// prepare the next batch with the sampled token
-			batch = C.llama_batch_get_one(&new_token_id, 1)
 
-			n_decode += 1
 		}
 	}
+
+	// for n_pos := 0; n_pos+int(batch.n_tokens) < int(n_prompt)+llm.n_predict; {
+	// 	select {
+	// 	case <-ctx.Done():
+	// 		on_next(nil, nil)
+	// 		return nil
+	// 	default:
+	// 		// evaluate the current batch with the transformer model
+	// 		if C.llama_decode(llm.ctx, batch) > 0 {
+	// 			on_next(nil, fmt.Errorf("failed to eval current batch"))
+	// 			return nil
+	// 		}
+
+	// 		n_pos += int(batch.n_tokens)
+
+	// 		// sample the next token
+	// 		{
+	// 			new_token_id = C.llama_sampler_sample(llm.smpl, llm.ctx, -1)
+
+	// 			// is it an end of generation?
+	// 			if C.llama_vocab_is_eog(llm.vocab, new_token_id) {
+	// 				on_next(nil, nil)
+	// 				return nil
+	// 			}
+
+	// 			buf := make([]C.char, 128)
+
+	// 			n := C.llama_token_to_piece(llm.vocab, new_token_id, &buf[0], C.int(len(buf)), 0, true)
+	// 			if n < 0 {
+	// 				on_next(nil, fmt.Errorf("failed to convert token to piece"))
+	// 				return nil
+	// 			}
+	// 			cstr := (*C.char)(unsafe.Pointer(&buf[0])) // Get pointer to the first element
+	// 			goStr := C.GoString(cstr)
+	// 			on_next([]byte(goStr), nil)
+	// 			// prepare the next batch with the sampled token
+	// 			batch = C.llama_batch_get_one(&new_token_id, 1)
+
+	// 			n_decode += 1
+	// 		}
+	// 	}
+	// }
 
 	on_next(nil, nil)
 	return nil

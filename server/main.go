@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+	amqp "github.com/rabbitmq/amqp091-go"
 )
 
 type wrappedWriter struct {
@@ -46,7 +47,19 @@ func Logging(next http.Handler) http.Handler {
 func main() {
 	log.Print("Hello, server!")
 
-	var upgrader = websocket.Upgrader{
+	conn, err := amqp.Dial("amqp://admin:admin@localhost:5672/")
+	if err != nil {
+		log.Panicf("%s: %s", "failed to connect to RabbitMQ", err)
+	}
+	defer conn.Close()
+
+	pubConn, err := amqp.Dial("amqp://admin:admin@localhost:5672/")
+	if err != nil {
+		log.Panicf("%s: %s", "failed to connect to RabbitMQ", err)
+	}
+	defer pubConn.Close()
+
+	upgrader := websocket.Upgrader{
 		ReadBufferSize:  1024,
 		WriteBufferSize: 1024,
 		CheckOrigin: func(r *http.Request) bool {
@@ -56,17 +69,18 @@ func main() {
 
 	router := http.NewServeMux()
 	router.HandleFunc("/completions", func(w http.ResponseWriter, r *http.Request) {
-		conn, err := upgrader.Upgrade(w, r, nil)
+		ws, err := upgrader.Upgrade(w, r, nil)
 		if err != nil {
 			log.Println(err)
 		}
 
-		conn.SetCloseHandler(func(code int, text string) error {
+		ws.SetCloseHandler(func(code int, text string) error {
 			log.Printf("Closing ws connection. Code: %d, text:%s", code, text)
 			return nil
 		})
 
-		socket := NewSocket(conn, r.Context())
+		socket := NewSocket(ws, conn, pubConn, r.Context())
+		socket.InitilizeRabbit()
 		defer socket.Close()
 		socket.HandleMessages()
 	})
@@ -76,7 +90,7 @@ func main() {
 		Handler: Logging(router),
 	}
 
-	err := server.ListenAndServe()
+	err = server.ListenAndServe()
 	if err != nil {
 		log.Fatal(err)
 	}

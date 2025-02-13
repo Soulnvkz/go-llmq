@@ -4,13 +4,14 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"io"
 	"log"
-	"strings"
+	"math/rand"
+	"strconv"
 	"sync"
 	"time"
 
 	"github.com/gorilla/websocket"
+	amqp "github.com/rabbitmq/amqp091-go"
 )
 
 type Message struct {
@@ -35,6 +36,12 @@ type Socket struct {
 	ctx    context.Context
 	cancel context.CancelFunc
 
+	amqpConn    *amqp.Connection
+	amqpPubConn *amqp.Connection
+	ch          *amqp.Channel
+	pubch       *amqp.Channel
+	qName       string
+
 	pingTicker *time.Ticker
 
 	mu           *sync.Mutex
@@ -45,11 +52,13 @@ const (
 	PING_DELAY = 5000 * time.Minute
 )
 
-func NewSocket(c *websocket.Conn, ctx context.Context) *Socket {
+func NewSocket(c *websocket.Conn, amqpConn, amqpPubConn *amqp.Connection, ctx context.Context) *Socket {
 	nctx, cancel := context.WithCancel(ctx)
 
 	return &Socket{
 		c:            c,
+		amqpConn:     amqpConn,
+		amqpPubConn:  amqpPubConn,
 		ctx:          nctx,
 		cancel:       cancel,
 		pingTicker:   time.NewTicker(PING_DELAY),
@@ -58,9 +67,28 @@ func NewSocket(c *websocket.Conn, ctx context.Context) *Socket {
 	}
 }
 
-func (socket Socket) Close() {
+func (socket *Socket) InitilizeRabbit() error {
+	ch, err := socket.amqpConn.Channel()
+	if err != nil {
+		return err
+	}
+	socket.ch = ch
+
+	pubch, err := socket.amqpPubConn.Channel()
+	if err != nil {
+		return err
+	}
+	socket.pubch = pubch
+
+	return nil
+}
+
+func (socket *Socket) Close() {
 	log.Printf("closing...")
+
 	socket.c.Close()
+	socket.ch.Close()
+	socket.pubch.Close()
 }
 
 func (socket *Socket) HandleMessages() {
@@ -135,34 +163,92 @@ func (socket *Socket) handleCompletions(message *Message) {
 			socket.mu.Unlock()
 		}()
 
-		stream := strings.NewReader(Lorem)
-		done := make(chan bool)
-		read := make(chan bool)
+		// stream := strings.NewReader(Lorem)
+		// done := make(chan bool)
+		// read := make(chan bool)
+
+		q, err := socket.ch.QueueDeclare(
+			"",    // name
+			false, // durable
+			false, // delete when unused
+			true,  // exclusive
+			false, // noWait
+			nil,   // arguments
+		)
+		if err != nil {
+			log.Printf("failed to declare queue %s", q.Name)
+			return
+		}
+		msgs, err := socket.ch.Consume(
+			q.Name, // queue
+			"",     // consumer
+			true,   // auto-ack
+			false,  // exclusive
+			false,  // no-local
+			false,  // no-wait
+			nil,    // args
+		)
+		if err != nil {
+			log.Printf("failed initilize consume %s", err)
+			return
+		}
+
+		id := strconv.Itoa(rand.Int())
+
+		err = socket.pubch.PublishWithContext(ctx,
+			"",      // exchange
+			"llm_q", // routing key
+			false,   // mandatory
+			false,   // immediate
+			amqp.Publishing{
+				ContentType:   "text/plain",
+				CorrelationId: id,
+				ReplyTo:       q.Name,
+				Body:          []byte(message.Content),
+			})
+		if err != nil {
+			log.Printf("failed publish %s", err)
+			return
+		}
 
 	loop:
 		for {
-			go func() {
-				abuff := make([]byte, 8)
-				_, err := stream.Read(abuff)
-				if err == io.EOF {
-					done <- true
-					return
-				}
-				if len(abuff) > 0 {
-					err = socket.writeCompletions(abuff)
-					if err != nil {
-						done <- true
-					}
-				}
-				time.Sleep(1000 * time.Millisecond)
-				read <- true
-			}()
 			select {
 			case <-ctx.Done():
+				err = socket.pubch.PublishWithContext(ctx,
+					"",             // exchange
+					"llm_q_cancel", // routing key
+					false,          // mandatory
+					false,          // immediate
+					amqp.Publishing{
+						ContentType: "text/plain",
+						Body:        []byte(message.Content),
+					})
+				if err != nil {
+					log.Printf("failed publish %s", err)
+					return
+				}
 				break loop
-			case <-read:
-			case <-done:
-				break loop
+			case d := <-msgs:
+				if id == d.CorrelationId {
+					str := string(d.Body)
+					if str == "<start>" {
+						err = socket.writeStartCompletions()
+						if err != nil {
+							break loop
+						}
+						continue loop
+					}
+					if str == "<end>" {
+						socket.writeEndCompletions()
+						break loop
+					}
+
+					err = socket.writeCompletions(d.Body)
+					if err != nil {
+						break loop
+					}
+				}
 			}
 		}
 	}()
@@ -201,6 +287,32 @@ func (socket *Socket) writeCompletions(buff []byte) error {
 	message := &Message{
 		MessageType: CompletitionsNext,
 		Content:     string(buff),
+	}
+	data, err := json.Marshal(message)
+	if err != nil {
+		log.Printf("failed to marshal message, %s", err)
+		return err
+	}
+
+	return socket.c.WriteMessage(websocket.TextMessage, data)
+}
+
+func (socket *Socket) writeStartCompletions() error {
+	message := &Message{
+		MessageType: CompletitionsStart,
+	}
+	data, err := json.Marshal(message)
+	if err != nil {
+		log.Printf("failed to marshal message, %s", err)
+		return err
+	}
+
+	return socket.c.WriteMessage(websocket.TextMessage, data)
+}
+
+func (socket *Socket) writeEndCompletions() error {
+	message := &Message{
+		MessageType: CompletitionsEnd,
 	}
 	data, err := json.Marshal(message)
 	if err != nil {
