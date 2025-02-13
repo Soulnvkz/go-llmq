@@ -2,14 +2,10 @@ package main
 
 import (
 	"bufio"
-	"context"
 	"errors"
-	"fmt"
-	"io"
 	"log"
 	"net"
 	"net/http"
-	"strings"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -47,79 +43,6 @@ func Logging(next http.Handler) http.Handler {
 	})
 }
 
-func handleMessage(buff []byte, c *websocket.Conn) {
-	message := string(buff)
-	if message == "ping" {
-		err := c.WriteMessage(websocket.TextMessage, []byte("pong"))
-		if err != nil {
-			log.Println("writing message error:", err)
-		}
-		return
-	}
-
-	r := strings.NewReader(fmt.Sprintf("answer to: %s", message))
-	err := c.WriteMessage(websocket.TextMessage, []byte(`<start>`))
-	if err != nil {
-		log.Println("writing message error:", err)
-	}
-	for {
-		abuff := make([]byte, 1)
-		_, err := r.Read(abuff)
-		if err == io.EOF {
-			break
-		}
-		if len(abuff) > 0 {
-			err = c.WriteMessage(websocket.TextMessage, abuff)
-			if err != nil {
-				log.Println("writing message error:", err)
-				break
-			}
-		}
-		time.Sleep(1000 * time.Millisecond)
-	}
-	err = c.WriteMessage(websocket.TextMessage, []byte(`<end>`))
-	if err != nil {
-		log.Println("writing message error:", err)
-	}
-}
-
-// func handleMessages(ctxCancel context.CancelFunc, c *websocket.Conn) {
-// 	ticker := time.NewTicker(1500 * time.Millisecond)
-// 	defer ticker.Stop()
-// 	gotPong := make(chan bool)
-
-// 	go func() {
-// 		for {
-// 			select {
-// 			case pong := <-gotPong:
-// 				if pong {
-// 					ticker.Reset(1500 * time.Millisecond)
-// 					gotPong <- false
-// 				}
-// 			case <-ticker.C:
-// 				ctxCancel()
-// 			}
-// 		}
-// 	}()
-
-// 	for {
-// 		mt, buff, err := c.ReadMessage()
-// 		if err != nil {
-// 			log.Println("reading message error:", err)
-// 			ctxCancel()
-// 		}
-
-// 		go handleMessage(buff, c, gotPong)
-
-// 		_ = mt
-// 		_ = buff
-// 	}
-// }
-
-type Socket struct {
-	c *websocket.Conn
-}
-
 func main() {
 	log.Print("Hello, server!")
 
@@ -132,47 +55,20 @@ func main() {
 	}
 
 	router := http.NewServeMux()
-	router.HandleFunc("/test", func(w http.ResponseWriter, r *http.Request) {
-		w.Write([]byte("Hello, test!"))
-	})
-	router.HandleFunc("/test1", func(w http.ResponseWriter, r *http.Request) {
-		w.Write([]byte("Hello, test1!"))
-	})
-	router.HandleFunc("/echo", func(w http.ResponseWriter, r *http.Request) {
+	router.HandleFunc("/completions", func(w http.ResponseWriter, r *http.Request) {
 		conn, err := upgrader.Upgrade(w, r, nil)
 		if err != nil {
 			log.Println(err)
 		}
-		defer conn.Close()
 
 		conn.SetCloseHandler(func(code int, text string) error {
 			log.Printf("Closing ws connection. Code: %d, text:%s", code, text)
 			return nil
 		})
 
-		ctx, cancel := context.WithCancel(context.Background())
-
-		go func() {
-			for {
-				mt, message, err := conn.ReadMessage()
-				if err != nil {
-					log.Println("reading message error:", err)
-					cancel()
-					break
-				}
-				if mt == websocket.CloseMessage {
-					log.Print("requesting close connection...")
-					cancel()
-					break
-				}
-
-				log.Printf("got message: %s", string(message))
-
-				go handleMessage(message, conn)
-			}
-		}()
-
-		<-ctx.Done()
+		socket := NewSocket(conn, r.Context())
+		defer socket.Close()
+		socket.HandleMessages()
 	})
 
 	server := http.Server{
