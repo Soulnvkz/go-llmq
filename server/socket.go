@@ -21,14 +21,17 @@ type Message struct {
 
 const (
 	PingMessage          = 1
+	PongMessage          = 1
 	CompletitionsMessage = 2
 	CancelMessage        = 3
-	CompletitionsStart   = 1
-	CompletitionsNext    = 2
-	CompletitionsEnd     = 3
-	CompletitionsQueue   = 4
-	Error                = 5
-	Lorem                = "Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat. Duis aute irure dolor in reprehenderit in voluptate velit esse cillum dolore eu fugiat nulla pariatur. Excepteur sint occaecat cupidatat non proident, sunt in culpa qui officia deserunt mollit anim id est laborum."
+
+	CompletitionsStart = 2
+	CompletitionsNext  = 3
+	CompletitionsEnd   = 4
+	CompletitionsQueue = 5
+
+	Error = 6
+	Lorem = "Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat. Duis aute irure dolor in reprehenderit in voluptate velit esse cillum dolore eu fugiat nulla pariatur. Excepteur sint occaecat cupidatat non proident, sunt in culpa qui officia deserunt mollit anim id est laborum."
 )
 
 type Socket struct {
@@ -40,7 +43,6 @@ type Socket struct {
 	amqpPubConn *amqp.Connection
 	ch          *amqp.Channel
 	pubch       *amqp.Channel
-	qName       string
 
 	pingTicker *time.Ticker
 
@@ -109,9 +111,9 @@ loop:
 
 func (socket *Socket) handlePing() {
 	socket.pingTicker.Reset(PING_DELAY)
-	err := socket.c.WriteMessage(websocket.TextMessage, []byte("pong"))
+	err := socket.writePong()
 	if err != nil {
-		log.Println("writing message error:", err)
+		log.Printf("writing message error: %s", err)
 		socket.cancel()
 	}
 }
@@ -193,8 +195,13 @@ func (socket *Socket) handleCompletions(message *Message) {
 			return
 		}
 
-		id := strconv.Itoa(rand.Int())
+		err = socket.writeQueueCompletions()
+		if err != nil {
+			log.Printf("failed to response %s", err)
+			return
+		}
 
+		id := strconv.Itoa(rand.Int())
 		err = socket.pubch.PublishWithContext(ctx,
 			"",      // exchange
 			"llm_q", // routing key
@@ -283,10 +290,37 @@ func (socket *Socket) handleMessage(buff []byte) {
 	}
 }
 
+func (socket *Socket) writePong() error {
+	message := &Message{
+		MessageType: PongMessage,
+	}
+
+	data, err := json.Marshal(message)
+	if err != nil {
+		log.Printf("failed to marshal message, %s", err)
+		return err
+	}
+
+	return socket.c.WriteMessage(websocket.TextMessage, data)
+}
+
 func (socket *Socket) writeCompletions(buff []byte) error {
 	message := &Message{
 		MessageType: CompletitionsNext,
 		Content:     string(buff),
+	}
+	data, err := json.Marshal(message)
+	if err != nil {
+		log.Printf("failed to marshal message, %s", err)
+		return err
+	}
+
+	return socket.c.WriteMessage(websocket.TextMessage, data)
+}
+
+func (socket *Socket) writeQueueCompletions() error {
+	message := &Message{
+		MessageType: CompletitionsQueue,
 	}
 	data, err := json.Marshal(message)
 	if err != nil {

@@ -46,14 +46,15 @@ func Logging(next http.Handler) http.Handler {
 
 func main() {
 	log.Print("Hello, server!")
+	time.Sleep(10 * time.Second)
 
-	conn, err := amqp.Dial("amqp://admin:admin@localhost:5672/")
+	conn, err := amqp.Dial("amqp://admin:admin@rabbitmq:5672/")
 	if err != nil {
 		log.Panicf("%s: %s", "failed to connect to RabbitMQ", err)
 	}
 	defer conn.Close()
 
-	pubConn, err := amqp.Dial("amqp://admin:admin@localhost:5672/")
+	pubConn, err := amqp.Dial("amqp://admin:admin@rabbitmq:5672/")
 	if err != nil {
 		log.Panicf("%s: %s", "failed to connect to RabbitMQ", err)
 	}

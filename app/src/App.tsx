@@ -4,7 +4,9 @@ import './App.css'
 import Button from './components/button/button'
 import Message from './components/message/message'
 import MessagesContainer from './components/message/messagesContainer'
-import useWebSocket from './hooks/useWebSocket'
+import { CompletitionsEnd, CompletitionsMessage, CompletitionsNext, CompletitionsStart, useWebSocket, WSMessage } from './hooks/useWebSocket'
+
+
 
 interface Message {
   id: number;
@@ -14,15 +16,21 @@ interface Message {
 
 function App() {
   const { send } = useWebSocket({
-    path: "/ws/echo",
-    onMessage: (message: string) => {
-      console.log("onMessage", message);
-      if (message === "<start>") {
+    path: "/ws/completions",
+    onMessage: (message: WSMessage) => {
+      if(message.message_type === CompletitionsStart) {
         currentRef.current!.innerHTML = "<span></span>"
         currentRef.current!.style.display = "block"
         return
       }
-      if (message === "<end>") {
+
+      if(message.message_type === CompletitionsNext) {
+        if (currentRef.current) {
+          currentRef.current.innerHTML = "<span>" + currentRef.current.innerHTML.replace("<span>", "").replace("</span>", "") + message.content! + "</span>"
+        }
+      }
+
+      if(message.message_type === CompletitionsEnd) {
         index.current = index.current + 1;
         const text = currentRef.current!.innerHTML.replace("<span>", "").replace("</span>", "")
         currentRef.current!.innerHTML = "<span></span>"
@@ -32,12 +40,31 @@ function App() {
           isUser: false,
           text: text
         }]);
-        
+
         return
       }
-      if(currentRef.current) {
-        currentRef.current.innerHTML = "<span>" + currentRef.current.innerHTML.replace("<span>", "").replace("</span>", "") + message + "</span>"
-      }
+      
+      // if (message === "<start>") {
+      //   currentRef.current!.innerHTML = "<span></span>"
+      //   currentRef.current!.style.display = "block"
+      //   return
+      // }
+      // if (message === "<end>") {
+      //   index.current = index.current + 1;
+      //   const text = currentRef.current!.innerHTML.replace("<span>", "").replace("</span>", "")
+      //   currentRef.current!.innerHTML = "<span></span>"
+      //   currentRef.current!.style.display = "none"
+      //   setMessages(prev => [...prev, {
+      //     id: index.current,
+      //     isUser: false,
+      //     text: text
+      //   }]);
+
+      //   return
+      // }
+      // if (currentRef.current) {
+      //   currentRef.current.innerHTML = "<span>" + currentRef.current.innerHTML.replace("<span>", "").replace("</span>", "") + message + "</span>"
+      // }
     }
   })
 
@@ -74,7 +101,10 @@ function App() {
             text: message
           }]);
 
-          send(message);
+          send(JSON.stringify({
+            message_type: CompletitionsMessage,
+            content: message
+          }));
         }} />
       </div>
     </div>)

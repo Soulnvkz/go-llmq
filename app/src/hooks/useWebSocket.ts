@@ -2,10 +2,25 @@ import { useEffect, useRef } from "react";
 
 interface Params {
     path: string;
-    onMessage: (message: string) => void; 
+    onMessage: (message: WSMessage) => void;
 }
 
-function useWebSocket({
+export interface WSMessage {
+    message_type: number;
+    content?: string;
+}
+
+export const PingMessage = 1
+export const PongMessage = 1
+export const CompletitionsMessage = 2
+export const CancelMessage = 3
+
+export const CompletitionsStart = 2
+export const CompletitionsNext = 3
+export const CompletitionsEnd = 4
+export const CompletitionsQueue = 5
+
+export function useWebSocket({
     path,
     onMessage,
 }: Params) {
@@ -23,7 +38,9 @@ function useWebSocket({
                 console.info("ws opened...");
 
                 // starting ping/pong messaging
-                socket.current!.send("ping");
+                socket.current!.send(JSON.stringify({
+                    message_type: PingMessage
+                }));
             }
             socket.current.onclose = function (_) {
                 console.info("ws closed...");
@@ -32,15 +49,18 @@ function useWebSocket({
             }
             socket.current.onmessage = function (e) {
                 console.info("ws got message...", e.data);
+                const message = JSON.parse(e.data) as WSMessage;
 
-                if (e.data === "pong") {
+                if (message.message_type == PongMessage) {
                     pingTimeout.current = setTimeout(() => {
-                        socket.current!.send("ping");
+                        socket.current!.send(JSON.stringify({
+                            message_type: PingMessage
+                        }));
                     }, 1000);
                     return;
                 }
 
-                onMessage(e.data);
+                onMessage(message);
             }
             socket.current.onerror = function (_) {
                 console.error("ws error...");
@@ -64,5 +84,3 @@ function useWebSocket({
         }
     }
 }
-
-export default useWebSocket;
