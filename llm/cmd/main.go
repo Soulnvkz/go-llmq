@@ -3,9 +3,9 @@ package main
 import (
 	"log"
 	"os"
-	"sol/llm/llm_local"
 
 	amqp "github.com/rabbitmq/amqp091-go"
+	"github.com/soulnvkz/llm/internal/llama"
 )
 
 func main() {
@@ -32,7 +32,7 @@ func main() {
 		log.Fatal("ENV MODEL_PATH should be specifed")
 	}
 
-	llm := llm_local.NewLLM()
+	llm := llama.NewLLM()
 	llm.Initilize(model)
 	defer llm.Clean()
 

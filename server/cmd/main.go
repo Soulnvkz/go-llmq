@@ -10,6 +10,7 @@ import (
 
 	"github.com/gorilla/websocket"
 	amqp "github.com/rabbitmq/amqp091-go"
+	"github.com/soulnvkz/server/internal/ws"
 )
 
 type wrappedWriter struct {
@@ -70,17 +71,17 @@ func main() {
 
 	router := http.NewServeMux()
 	router.HandleFunc("/completions", func(w http.ResponseWriter, r *http.Request) {
-		ws, err := upgrader.Upgrade(w, r, nil)
+		websocket, err := upgrader.Upgrade(w, r, nil)
 		if err != nil {
 			log.Println(err)
 		}
 
-		ws.SetCloseHandler(func(code int, text string) error {
+		websocket.SetCloseHandler(func(code int, text string) error {
 			log.Printf("Closing ws connection. Code: %d, text:%s", code, text)
 			return nil
 		})
 
-		socket := NewSocket(ws, conn, pubConn, r.Context())
+		socket := ws.NewSocket(websocket, conn, pubConn, r.Context())
 		socket.InitilizeRabbit()
 		defer socket.Close()
 		socket.HandleMessages()

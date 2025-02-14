@@ -1,8 +1,8 @@
-package llm_local
+package llama
 
 /*
-#cgo CFLAGS: -I${SRCDIR}/../deps/llama.cpp/ggml/include -I${SRCDIR}/../deps/llama.cpp/include
-#cgo LDFLAGS: -L${SRCDIR}/../deps/llama.cpp/build/bin -lllama -lggml -lstdc++ -ldl -lm
+#cgo CFLAGS: -I${SRCDIR}/../../deps/llama.cpp/ggml/include -I${SRCDIR}/../../deps/llama.cpp/include
+#cgo LDFLAGS: -L${SRCDIR}/../../deps/llama.cpp/build/bin -lllama -lggml -lstdc++ -ldl -lm
 #include "llama.h"
 */
 import "C"

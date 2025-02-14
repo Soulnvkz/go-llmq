@@ -14,7 +14,7 @@ RUN cmake -S ./deps/llama.cpp -B ./deps/llama.cpp/build -DCMAKE_BUILD_TYPE=Relea
 RUN mkdir -p /app/lib && \
     find deps/llama.cpp/build -name "*.so" -exec cp {} /app/lib \;
 
-RUN go build -o llm .
+RUN go build -C ./cmd -o llm
 
 FROM ubuntu:22.04
 
@@ -27,7 +27,7 @@ RUN apt-get update \
     && find /var/cache -type f -delete
 
 COPY --from=build /app/lib/ /app
-COPY --from=build /app/llm .
+COPY --from=build /app/cmd/llm .
 ENV LD_LIBRARY_PATH=/app:$LD_LIBRARY_PATH
 
 CMD ["./llm"]

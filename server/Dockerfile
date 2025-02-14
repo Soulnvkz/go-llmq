@@ -14,7 +14,7 @@ RUN go mod tidy
 COPY . .
 
 # Build the Go application
-RUN go build -o server .
+RUN go build -C ./cmd -o server
 
 # Use a lightweight final image
 FROM alpine:latest
@@ -23,7 +23,7 @@ FROM alpine:latest
 WORKDIR /root/
 
 # Copy the compiled binary from the builder stage
-COPY --from=builder /app/server .
+COPY --from=builder /app/cmd/server .
 
 # Expose the port the server runs on (change if needed)
 EXPOSE 8080

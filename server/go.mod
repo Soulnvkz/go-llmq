@@ -1,4 +1,4 @@
-module sol/server
+module github.com/soulnvkz/server
 
 go 1.23.5
 
