@@ -1,0 +1,11 @@
+services:
+  llmq-app:
+    build:
+      context: .
+      dockerfile: build/app/dev/Dockerfile  # Specify your custom Dockerfile name here
+    ports:
+      - "5005:5005"
+    volumes:
+      - ./app:/app
+    environment:
+      - CHOKIDAR_USEPOLLING=true

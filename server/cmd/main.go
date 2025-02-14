@@ -3,13 +3,13 @@ package main
 import (
 	"bufio"
 	"errors"
-	"log"
 	"net"
 	"net/http"
 	"time"
 
 	"github.com/gorilla/websocket"
 	amqp "github.com/rabbitmq/amqp091-go"
+	"github.com/soulnvkz/log"
 	"github.com/soulnvkz/server/internal/ws"
 )
 
@@ -41,23 +41,23 @@ func Logging(next http.Handler) http.Handler {
 
 		next.ServeHTTP(wrapped, r)
 
-		log.Println(wrapped.statusCode, r.Method, r.URL.Path, time.Since(start))
+		log.Info().Println(wrapped.statusCode, r.Method, r.URL.Path, time.Since(start))
 	})
 }
 
 func main() {
-	log.Print("Hello, server!")
+	log.Info().Print("Hello, server!")
 	time.Sleep(10 * time.Second)
 
 	conn, err := amqp.Dial("amqp://admin:admin@rabbitmq:5672/")
 	if err != nil {
-		log.Panicf("%s: %s", "failed to connect to RabbitMQ", err)
+		log.Error().Panicf("%s: %s", "failed to connect to RabbitMQ", err)
 	}
 	defer conn.Close()
 
 	pubConn, err := amqp.Dial("amqp://admin:admin@rabbitmq:5672/")
 	if err != nil {
-		log.Panicf("%s: %s", "failed to connect to RabbitMQ", err)
+		log.Error().Panicf("%s: %s", "failed to connect to RabbitMQ", err)
 	}
 	defer pubConn.Close()
 
@@ -73,11 +73,11 @@ func main() {
 	router.HandleFunc("/completions", func(w http.ResponseWriter, r *http.Request) {
 		websocket, err := upgrader.Upgrade(w, r, nil)
 		if err != nil {
-			log.Println(err)
+			log.Error().Println(err)
 		}
 
 		websocket.SetCloseHandler(func(code int, text string) error {
-			log.Printf("Closing ws connection. Code: %d, text:%s", code, text)
+			log.Error().Printf("Closing ws connection. Code: %d, text:%s", code, text)
 			return nil
 		})
 
@@ -94,6 +94,6 @@ func main() {
 
 	err = server.ListenAndServe()
 	if err != nil {
-		log.Fatal(err)
+		log.Error().Fatal(err)
 	}
 }

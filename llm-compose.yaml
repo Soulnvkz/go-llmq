@@ -1,6 +1,8 @@
 services:
   llm:
-    build: .
+    build:
+      context: .
+      dockerfile: build/llm/Dockerfile
     environment:
       - MODEL_PATH=/app/models/SAINEMO-reMIX.i1-Q6_K.gguf
     volumes:
