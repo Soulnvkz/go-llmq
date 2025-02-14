@@ -14,6 +14,11 @@ services:
     build:
       context: .
       dockerfile: build/server/Dockerfile
+    environment:
+      MQ_USER=admin
+      MQ_PASSWORD=admin
+      MQ_HOST=rabbitmq
+      MQ_PORT=5672
     ports:
       - "8080:8080"
 

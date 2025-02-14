@@ -3,3 +3,5 @@ db-data
 pgadmin-data
 db-conf
 .env
+
+**/cmd/cmd

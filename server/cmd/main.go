@@ -5,13 +5,22 @@ import (
 	"errors"
 	"net"
 	"net/http"
+	"os"
 	"time"
 
 	"github.com/gorilla/websocket"
-	amqp "github.com/rabbitmq/amqp091-go"
 	"github.com/soulnvkz/log"
+	"github.com/soulnvkz/mq"
 	"github.com/soulnvkz/server/internal/ws"
 )
+
+func Getenv(env string) (v string) {
+	v, f := os.LookupEnv(env)
+	if !f {
+		log.Error().Fatalf("ENV %s should be specifed", env)
+	}
+	return
+}
 
 type wrappedWriter struct {
 	http.ResponseWriter
@@ -47,19 +56,23 @@ func Logging(next http.Handler) http.Handler {
 
 func main() {
 	log.Info().Print("Hello, server!")
-	time.Sleep(10 * time.Second)
 
-	conn, err := amqp.Dial("amqp://admin:admin@rabbitmq:5672/")
-	if err != nil {
-		log.Error().Panicf("%s: %s", "failed to connect to RabbitMQ", err)
-	}
-	defer conn.Close()
+	mq_user := Getenv("MQ_USER")
+	mq_password := Getenv("MQ_PASSWORD")
+	mq_host := Getenv("MQ_HOST")
+	mq_port := Getenv("MQ_PORT")
 
-	pubConn, err := amqp.Dial("amqp://admin:admin@rabbitmq:5672/")
+	qconn, err := mq.MQConnect(mq_user, mq_password, mq_host, mq_port, 20)
 	if err != nil {
-		log.Error().Panicf("%s: %s", "failed to connect to RabbitMQ", err)
+		log.Error().Panicf("%s, failed to connect to RabbitMQ", err)
 	}
-	defer pubConn.Close()
+	defer qconn.Close()
+
+	pqconn, err := mq.MQConnect(mq_user, mq_password, mq_host, mq_port, 20)
+	if err != nil {
+		log.Error().Panicf("%s, failed to connect to RabbitMQ", err)
+	}
+	defer pqconn.Close()
 
 	upgrader := websocket.Upgrader{
 		ReadBufferSize:  1024,
@@ -81,9 +94,21 @@ func main() {
 			return nil
 		})
 
-		socket := ws.NewSocket(websocket, conn, pubConn, r.Context())
-		socket.InitilizeRabbit()
+		complitions_channel, err := qconn.Channel()
+		if err != nil {
+			log.Error().Printf("%s, failed to create channel", err)
+		}
+		defer complitions_channel.Close()
+
+		publish_channel, err := pqconn.Channel()
+		if err != nil {
+			log.Error().Printf("%s, failed to create channel", err)
+		}
+		defer publish_channel.Close()
+
+		socket := ws.NewWSCompletions(websocket, complitions_channel, publish_channel, r.Context())
 		defer socket.Close()
+
 		socket.HandleMessages()
 	})
 

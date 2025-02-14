@@ -4,14 +4,14 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"log"
-	"math/rand"
-	"strconv"
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
 	amqp "github.com/rabbitmq/amqp091-go"
+	"github.com/soulnvkz/log"
+	"github.com/soulnvkz/mq"
 )
 
 type Message struct {
@@ -20,8 +20,9 @@ type Message struct {
 }
 
 const (
-	PingMessage          = 1
-	PongMessage          = 1
+	PingMessage = 1
+	PongMessage = 1
+
 	CompletitionsMessage = 2
 	CancelMessage        = 3
 
@@ -31,69 +32,50 @@ const (
 	CompletitionsQueue = 5
 
 	Error = 6
-	Lorem = "Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat. Duis aute irure dolor in reprehenderit in voluptate velit esse cillum dolore eu fugiat nulla pariatur. Excepteur sint occaecat cupidatat non proident, sunt in culpa qui officia deserunt mollit anim id est laborum."
 )
 
-type Socket struct {
+type WSCompletions struct {
 	c      *websocket.Conn
 	ctx    context.Context
 	cancel context.CancelFunc
-
-	amqpConn    *amqp.Connection
-	amqpPubConn *amqp.Connection
-	ch          *amqp.Channel
-	pubch       *amqp.Channel
 
 	pingTicker *time.Ticker
 
 	mu           *sync.Mutex
 	streamCancel *context.CancelFunc
+
+	completions_channel *amqp.Channel
+	publish_channel     *amqp.Channel
 }
 
 const (
 	PING_DELAY = 5000 * time.Minute
 )
 
-func NewSocket(c *websocket.Conn, amqpConn, amqpPubConn *amqp.Connection, ctx context.Context) *Socket {
+func NewWSCompletions(
+	c *websocket.Conn,
+	completitons_channel, publish_channel *amqp.Channel,
+	ctx context.Context) *WSCompletions {
 	nctx, cancel := context.WithCancel(ctx)
 
-	return &Socket{
-		c:            c,
-		amqpConn:     amqpConn,
-		amqpPubConn:  amqpPubConn,
-		ctx:          nctx,
-		cancel:       cancel,
-		pingTicker:   time.NewTicker(PING_DELAY),
-		mu:           &sync.Mutex{},
-		streamCancel: nil,
+	return &WSCompletions{
+		c:                   c,
+		ctx:                 nctx,
+		cancel:              cancel,
+		pingTicker:          time.NewTicker(PING_DELAY),
+		completions_channel: completitons_channel,
+		publish_channel:     publish_channel,
+		mu:                  &sync.Mutex{},
+		streamCancel:        nil,
 	}
 }
 
-func (socket *Socket) InitilizeRabbit() error {
-	ch, err := socket.amqpConn.Channel()
-	if err != nil {
-		return err
-	}
-	socket.ch = ch
-
-	pubch, err := socket.amqpPubConn.Channel()
-	if err != nil {
-		return err
-	}
-	socket.pubch = pubch
-
-	return nil
-}
-
-func (socket *Socket) Close() {
-	log.Printf("closing...")
-
+func (socket *WSCompletions) Close() {
+	log.Info().Printf("closing...")
 	socket.c.Close()
-	socket.ch.Close()
-	socket.pubch.Close()
 }
 
-func (socket *Socket) HandleMessages() {
+func (socket *WSCompletions) HandleMessages() {
 loop:
 	for {
 		out := socket.readNext()
@@ -103,22 +85,22 @@ loop:
 		case message := <-out:
 			go socket.handleMessage(message)
 		case <-socket.pingTicker.C:
-			log.Printf("no pings...closing connections")
+			log.Info().Printf("no pings...closing connections")
 			socket.cancel()
 		}
 	}
 }
 
-func (socket *Socket) handlePing() {
+func (socket *WSCompletions) handlePing() {
 	socket.pingTicker.Reset(PING_DELAY)
 	err := socket.writePong()
 	if err != nil {
-		log.Printf("writing message error: %s", err)
+		log.Error().Printf("writing message error: %s", err)
 		socket.cancel()
 	}
 }
 
-func (socket *Socket) handleStreamCancel() {
+func (socket *WSCompletions) handleStreamCancel() {
 	socket.mu.Lock()
 	if socket.streamCancel != nil {
 		(*socket.streamCancel)()
@@ -129,9 +111,9 @@ func (socket *Socket) handleStreamCancel() {
 	socket.mu.Unlock()
 }
 
-func (socket *Socket) handleCompletions(message *Message) {
+func (socket *WSCompletions) handleCompletions(message *Message) {
 	if len(message.Content) == 0 {
-		log.Println("content is required for completitions")
+		log.Info().Println("content is required for completitions")
 		err := socket.writeError(errors.New("content is required for completitions"))
 		if err != nil {
 			socket.cancel()
@@ -142,7 +124,7 @@ func (socket *Socket) handleCompletions(message *Message) {
 	socket.mu.Lock()
 	if socket.streamCancel != nil {
 		socket.mu.Unlock()
-		log.Println("previous stream is not finished")
+		log.Info().Println("previous stream is not finished")
 		err := socket.writeError(errors.New("previous stream is not finished"))
 		if err != nil {
 			socket.cancel()
@@ -165,56 +147,53 @@ func (socket *Socket) handleCompletions(message *Message) {
 			socket.mu.Unlock()
 		}()
 
-		// stream := strings.NewReader(Lorem)
-		// done := make(chan bool)
-		// read := make(chan bool)
-
-		q, err := socket.ch.QueueDeclare(
-			"",    // name
-			false, // durable
-			false, // delete when unused
-			true,  // exclusive
-			false, // noWait
-			nil,   // arguments
-		)
+		respq, err := mq.NewMQueue(socket.completions_channel, "")
 		if err != nil {
-			log.Printf("failed to declare queue %s", q.Name)
+			log.Error().Printf("failed to declare queue")
 			return
 		}
-		msgs, err := socket.ch.Consume(
-			q.Name, // queue
-			"",     // consumer
-			true,   // auto-ack
-			false,  // exclusive
-			false,  // no-local
-			false,  // no-wait
-			nil,    // args
-		)
+
+		responses, err := respq.Consume()
 		if err != nil {
-			log.Printf("failed initilize consume %s", err)
+			log.Error().Printf("failed initilize consume %s", err)
 			return
 		}
 
 		err = socket.writeQueueCompletions()
 		if err != nil {
-			log.Printf("failed to response %s", err)
+			log.Error().Printf("failed to response %s", err)
 			return
 		}
 
-		id := strconv.Itoa(rand.Int())
-		err = socket.pubch.PublishWithContext(ctx,
+		request_id := uuid.New().String()
+
+		err = socket.publish_channel.ExchangeDeclare(
+			"llm_cancel_ex",
+			"fanout",
+			false,
+			true,
+			false,
+			false,
+			nil,
+		)
+		if err != nil {
+			log.Error().Printf("failed declare channel %s", err)
+			return
+		}
+
+		err = socket.publish_channel.PublishWithContext(ctx,
 			"",      // exchange
 			"llm_q", // routing key
 			false,   // mandatory
 			false,   // immediate
 			amqp.Publishing{
 				ContentType:   "text/plain",
-				CorrelationId: id,
-				ReplyTo:       q.Name,
+				CorrelationId: request_id,
+				ReplyTo:       respq.Name(),
 				Body:          []byte(message.Content),
 			})
 		if err != nil {
-			log.Printf("failed publish %s", err)
+			log.Error().Printf("failed publish %s", err)
 			return
 		}
 
@@ -222,22 +201,24 @@ func (socket *Socket) handleCompletions(message *Message) {
 		for {
 			select {
 			case <-ctx.Done():
-				err = socket.pubch.PublishWithContext(ctx,
-					"",             // exchange
-					"llm_q_cancel", // routing key
-					false,          // mandatory
-					false,          // immediate
+				// proccess already started and can be canceled exacly that proccess
+				err = socket.publish_channel.PublishWithContext(ctx,
+					"llm_cancel_ex", // exchange
+					"",              // routing key
+					false,           // mandatory
+					false,           // immediate
 					amqp.Publishing{
-						ContentType: "text/plain",
-						Body:        []byte(message.Content),
+						ContentType:   "text/plain",
+						CorrelationId: request_id,
+						Body:          []byte(message.Content),
 					})
 				if err != nil {
-					log.Printf("failed publish %s", err)
+					log.Error().Printf("failed publish %s", err)
 					return
 				}
 				break loop
-			case d := <-msgs:
-				if id == d.CorrelationId {
+			case d := <-responses:
+				if request_id == d.CorrelationId {
 					str := string(d.Body)
 					if str == "<start>" {
 						err = socket.writeStartCompletions()
@@ -261,11 +242,11 @@ func (socket *Socket) handleCompletions(message *Message) {
 	}()
 }
 
-func (socket *Socket) handleMessage(buff []byte) {
+func (socket *WSCompletions) handleMessage(buff []byte) {
 	var message Message
 	err := json.Unmarshal(buff, &message)
 	if err != nil {
-		log.Printf("unssuported message")
+		log.Info().Printf("unssuported message")
 		err = socket.writeError(errors.New("unssuported message"))
 		if err != nil {
 			socket.cancel()
@@ -281,7 +262,7 @@ func (socket *Socket) handleMessage(buff []byte) {
 	case message.MessageType == CompletitionsMessage:
 		socket.handleCompletions(&message)
 	default:
-		log.Printf("unssuported message")
+		log.Info().Printf("unssuported message")
 		err = socket.writeError(errors.New("unssuported message"))
 		if err != nil {
 			socket.cancel()
@@ -290,99 +271,99 @@ func (socket *Socket) handleMessage(buff []byte) {
 	}
 }
 
-func (socket *Socket) writePong() error {
+func (socket *WSCompletions) writePong() error {
 	message := &Message{
 		MessageType: PongMessage,
 	}
 
 	data, err := json.Marshal(message)
 	if err != nil {
-		log.Printf("failed to marshal message, %s", err)
+		log.Error().Printf("failed to marshal message, %s", err)
 		return err
 	}
 
 	return socket.c.WriteMessage(websocket.TextMessage, data)
 }
 
-func (socket *Socket) writeCompletions(buff []byte) error {
+func (socket *WSCompletions) writeCompletions(buff []byte) error {
 	message := &Message{
 		MessageType: CompletitionsNext,
 		Content:     string(buff),
 	}
 	data, err := json.Marshal(message)
 	if err != nil {
-		log.Printf("failed to marshal message, %s", err)
+		log.Error().Printf("failed to marshal message, %s", err)
 		return err
 	}
 
 	return socket.c.WriteMessage(websocket.TextMessage, data)
 }
 
-func (socket *Socket) writeQueueCompletions() error {
+func (socket *WSCompletions) writeQueueCompletions() error {
 	message := &Message{
 		MessageType: CompletitionsQueue,
 	}
 	data, err := json.Marshal(message)
 	if err != nil {
-		log.Printf("failed to marshal message, %s", err)
+		log.Error().Printf("failed to marshal message, %s", err)
 		return err
 	}
 
 	return socket.c.WriteMessage(websocket.TextMessage, data)
 }
 
-func (socket *Socket) writeStartCompletions() error {
+func (socket *WSCompletions) writeStartCompletions() error {
 	message := &Message{
 		MessageType: CompletitionsStart,
 	}
 	data, err := json.Marshal(message)
 	if err != nil {
-		log.Printf("failed to marshal message, %s", err)
+		log.Error().Printf("failed to marshal message, %s", err)
 		return err
 	}
 
 	return socket.c.WriteMessage(websocket.TextMessage, data)
 }
 
-func (socket *Socket) writeEndCompletions() error {
+func (socket *WSCompletions) writeEndCompletions() error {
 	message := &Message{
 		MessageType: CompletitionsEnd,
 	}
 	data, err := json.Marshal(message)
 	if err != nil {
-		log.Printf("failed to marshal message, %s", err)
+		log.Error().Printf("failed to marshal message, %s", err)
 		return err
 	}
 
 	return socket.c.WriteMessage(websocket.TextMessage, data)
 }
 
-func (socket *Socket) writeError(err error) error {
+func (socket *WSCompletions) writeError(err error) error {
 	message := &Message{
 		MessageType: Error,
 		Content:     err.Error(),
 	}
 	data, err := json.Marshal(message)
 	if err != nil {
-		log.Printf("failed to marshal message, %s", err)
+		log.Error().Printf("failed to marshal message, %s", err)
 		return err
 	}
 
 	return socket.c.WriteMessage(websocket.TextMessage, data)
 }
 
-func (socket *Socket) readNext() chan []byte {
+func (socket *WSCompletions) readNext() chan []byte {
 	buff := make(chan []byte)
 
 	go func() {
 		mt, message, err := socket.c.ReadMessage()
 		if err != nil {
-			log.Println("reading message error:", err)
+			log.Error().Println("reading message error:", err)
 			socket.cancel()
 			return
 		}
 		if mt == websocket.CloseMessage {
-			log.Print("requesting close connection...")
+			log.Error().Print("requesting close connection...")
 			socket.cancel()
 			return
 		}

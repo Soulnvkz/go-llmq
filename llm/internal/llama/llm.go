@@ -9,7 +9,10 @@ import "C"
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"log"
+	"sync"
 	"unsafe"
 )
 
@@ -22,7 +25,11 @@ type LLM struct {
 	n_ctx     int
 	n_batch   int
 
-	streamCancel *context.CancelFunc
+	mu         sync.Mutex
+	cancelList map[string]struct {
+		cancel *context.CancelFunc
+		ctx    *context.Context
+	}
 }
 
 func NewLLM() *LLM {
@@ -31,7 +38,11 @@ func NewLLM() *LLM {
 		n_ctx:     4096,
 		n_batch:   512,
 
-		streamCancel: nil,
+		mu: sync.Mutex{},
+		cancelList: map[string]struct {
+			cancel *context.CancelFunc
+			ctx    *context.Context
+		}{},
 	}
 }
 
@@ -44,7 +55,7 @@ func (llm *LLM) load_model(model_path string) error {
 	}
 
 	model_params := C.llama_model_default_params()
-	model_params.n_gpu_layers = 10
+	model_params.n_gpu_layers = 0
 
 	model := C.llama_model_load_from_file(C.CString(model_path), model_params)
 	if model == nil {
@@ -137,56 +148,85 @@ func (llm *LLM) Clean() error {
 	return nil
 }
 
-func (llm *LLM) Cancel() {
-	if llm.streamCancel != nil {
-		(*llm.streamCancel)()
+func (llm *LLM) Cancel(req_id string) {
+	c, ok := llm.cancelList[req_id]
+	if !ok {
+		log.Printf("Cancel: adding ctx for %s", req_id)
+		ctx, cancel := context.WithCancel(context.Background())
+		llm.cancelList[req_id] = struct {
+			cancel *context.CancelFunc
+			ctx    *context.Context
+		}{
+			ctx:    &ctx,
+			cancel: &cancel,
+		}
+		return
 	}
+
+	log.Printf("Cancel: ctx %s already exists, call cancel", req_id)
+	(*c.cancel)()
+
+	// TODO: clean map
 }
 
-func (llm *LLM) Proccess(prompt string, on_next func([]byte, error)) error {
+func (llm *LLM) ProccessNext(prompt string, req_id string, on_next func([]byte, error) error) (chan bool, error) {
 	n_prompt, prompt_tokens, err := llm.tokenize_promtp(prompt)
 	if err != nil {
-		return err
+		return nil, err
+	}
+
+	_, ok := llm.cancelList[req_id]
+	var ctx context.Context
+	var cancel context.CancelFunc
+	if !ok {
+		log.Printf("ProccessNext: adding ctx for %s", req_id)
+		ctx, cancel = context.WithCancel(context.Background())
+		llm.cancelList[req_id] = struct {
+			cancel *context.CancelFunc
+			ctx    *context.Context
+		}{
+			ctx:    &ctx,
+			cancel: &cancel,
+		}
+	} else {
+		log.Printf("ProccessNext: ctx %s already exists", req_id)
+		return nil, errors.New("request has canceled already")
 	}
 
 	batch := C.llama_batch_get_one(&prompt_tokens[0], C.int(len(prompt_tokens)))
 	n_decode := 0
 	new_token_id := C.llama_token(0)
 
-	ctx, cancel := context.WithCancel(context.Background())
-	llm.streamCancel = &cancel
-
-	defer func() {
-		llm.streamCancel = nil
-	}()
-
 	n_pos := 0
-loop:
-	for {
-		select {
-		case <-ctx.Done():
-			on_next(nil, nil)
-			return nil
-		default:
-			if n_pos+int(batch.n_tokens) >= int(n_prompt)+llm.n_predict {
+	stop := make(chan bool)
+	go func() {
+	loop:
+		for {
+			select {
+			case <-ctx.Done():
+				stop <- true
 				break loop
-			}
-			// evaluate the current batch with the transformer model
-			if C.llama_decode(llm.ctx, batch) > 0 {
-				on_next(nil, fmt.Errorf("failed to eval current batch"))
-				return nil
-			}
+			default:
+				if n_pos+int(batch.n_tokens) >= int(n_prompt)+llm.n_predict {
+					stop <- true
+					break loop
+				}
+				// evaluate the current batch with the transformer model
+				if C.llama_decode(llm.ctx, batch) > 0 {
+					on_next(nil, fmt.Errorf("failed to eval current batch"))
+					stop <- true
+					break loop
+				}
 
-			n_pos += int(batch.n_tokens)
+				n_pos += int(batch.n_tokens)
 
-			// sample the next token
-			{
+				// sample the next token
 				new_token_id = C.llama_sampler_sample(llm.smpl, llm.ctx, -1)
 
 				// is it an end of generation?
 				if C.llama_vocab_is_eog(llm.vocab, new_token_id) {
-					on_next(nil, nil)
-					return nil
+					stop <- true
+					break loop
 				}
 
 				buf := make([]C.char, 128)
@@ -194,62 +234,22 @@ loop:
 				n := C.llama_token_to_piece(llm.vocab, new_token_id, &buf[0], C.int(len(buf)), 0, true)
 				if n < 0 {
 					on_next(nil, fmt.Errorf("failed to convert token to piece"))
-					return nil
+					stop <- true
+					break loop
 				}
 				cstr := (*C.char)(unsafe.Pointer(&buf[0])) // Get pointer to the first element
-				goStr := C.GoString(cstr)
-				on_next([]byte(goStr), nil)
+				err = on_next([]byte(C.GoString(cstr)), nil)
+				if err != nil {
+					stop <- true
+					break loop
+				}
 				// prepare the next batch with the sampled token
 				batch = C.llama_batch_get_one(&new_token_id, 1)
 
 				n_decode += 1
 			}
-
 		}
-	}
+	}()
 
-	// for n_pos := 0; n_pos+int(batch.n_tokens) < int(n_prompt)+llm.n_predict; {
-	// 	select {
-	// 	case <-ctx.Done():
-	// 		on_next(nil, nil)
-	// 		return nil
-	// 	default:
-	// 		// evaluate the current batch with the transformer model
-	// 		if C.llama_decode(llm.ctx, batch) > 0 {
-	// 			on_next(nil, fmt.Errorf("failed to eval current batch"))
-	// 			return nil
-	// 		}
-
-	// 		n_pos += int(batch.n_tokens)
-
-	// 		// sample the next token
-	// 		{
-	// 			new_token_id = C.llama_sampler_sample(llm.smpl, llm.ctx, -1)
-
-	// 			// is it an end of generation?
-	// 			if C.llama_vocab_is_eog(llm.vocab, new_token_id) {
-	// 				on_next(nil, nil)
-	// 				return nil
-	// 			}
-
-	// 			buf := make([]C.char, 128)
-
-	// 			n := C.llama_token_to_piece(llm.vocab, new_token_id, &buf[0], C.int(len(buf)), 0, true)
-	// 			if n < 0 {
-	// 				on_next(nil, fmt.Errorf("failed to convert token to piece"))
-	// 				return nil
-	// 			}
-	// 			cstr := (*C.char)(unsafe.Pointer(&buf[0])) // Get pointer to the first element
-	// 			goStr := C.GoString(cstr)
-	// 			on_next([]byte(goStr), nil)
-	// 			// prepare the next batch with the sampled token
-	// 			batch = C.llama_batch_get_one(&new_token_id, 1)
-
-	// 			n_decode += 1
-	// 		}
-	// 	}
-	// }
-
-	on_next(nil, nil)
-	return nil
+	return stop, nil
 }

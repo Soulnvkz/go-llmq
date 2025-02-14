@@ -3,142 +3,120 @@ package main
 import (
 	"log"
 	"os"
+	"sync"
 
 	amqp "github.com/rabbitmq/amqp091-go"
 	"github.com/soulnvkz/llm/internal/llama"
+	"github.com/soulnvkz/mq"
 )
 
-func main() {
-	// Set up a connection to the server.
-	// conn, err := grpc.NewClient("localhost:5000", grpc.WithTransportCredentials(insecure.NewCredentials()))
-	// if err != nil {
-	// 	fmt.Printf("did not connect: %v", err)
-	// }
-	// defer conn.Close()
-	// c := proto.NewDbeeClient(conn)
-
-	// name := "bob"
-	// // Contact the server and print out its response.
-	// ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-	// defer cancel()
-	// r, err := c.SayHello(ctx, &proto.HelloRequest{Name: name})
-	// if err != nil {
-	// 	fmt.Printf("could not greet: %v", err)
-	// }
-	// fmt.Printf("Greeting: %s", r.GetMessage())
-
-	model := os.Getenv("MODEL_PATH")
-	if len(model) == 0 {
-		log.Fatal("ENV MODEL_PATH should be specifed")
+func Getenv(env string) (v string) {
+	v, f := os.LookupEnv(env)
+	if !f {
+		log.Fatalf("ENV %s should be specifed", env)
 	}
+	return
+}
+
+func main() {
+	model := Getenv("MODEL_PATH")
+
+	mq_user := Getenv("MQ_USER")
+	mq_password := Getenv("MQ_PASSWORD")
+	mq_host := Getenv("MQ_HOST")
+	mq_port := Getenv("MQ_PORT")
 
 	llm := llama.NewLLM()
 	llm.Initilize(model)
 	defer llm.Clean()
 
-	conn, err := amqp.Dial("amqp://admin:admin@localhost:5672/")
+	qconn, err := mq.MQConnect(mq_user, mq_password, mq_host, mq_port, 20)
 	if err != nil {
 		log.Panicf("%s, failed to connect to RabbitMQ", err)
 	}
-	defer conn.Close()
+	defer qconn.Close()
 
-	pubConn, err := amqp.Dial("amqp://admin:admin@localhost:5672/")
+	pqconn, err := mq.MQConnect(mq_user, mq_password, mq_host, mq_port, 20)
 	if err != nil {
 		log.Panicf("%s, failed to connect to RabbitMQ", err)
 	}
-	defer pubConn.Close()
+	defer pqconn.Close()
 
-	ch, err := conn.Channel()
+	req_channel, err := qconn.Channel()
 	if err != nil {
-		log.Panicf("%s, failed to create channel", err)
+		log.Panicf("%s, failed declare channel", err)
 	}
-	defer ch.Close()
-
-	cch, err := conn.Channel()
+	defer req_channel.Close()
+	err = req_channel.Qos(1, 0, false)
 	if err != nil {
-		log.Panicf("%s, failed to create channel", err)
+		log.Panicf("%s, failed to setup qos", err)
 	}
-	defer cch.Close()
 
-	pubch, err := pubConn.Channel()
+	cancel_channel, err := qconn.Channel()
 	if err != nil {
-		log.Panicf("%s, failed to create channel", err)
+		log.Panicf("%s, failed declare channel", err)
 	}
-	defer pubch.Close()
+	defer cancel_channel.Close()
 
-	q, err := ch.QueueDeclare(
-		"llm_q", // name
-		false,   // durable
-		false,   // delete when unused
-		false,   // exclusive
-		false,   // no-wait
-		nil,     // args
+	err = cancel_channel.ExchangeDeclare(
+		"llm_cancel_ex",
+		"fanout",
+		false,
+		true,
+		false,
+		false,
+		nil,
 	)
 	if err != nil {
-		log.Panicf("%s, failed to declare requests queue", err)
+		log.Panicf("%s, failed declare channel", err)
 	}
 
-	qCancel, err := cch.QueueDeclare(
-		"llm_q_cancel", // name
-		false,          // durable
-		false,          // delete when unused
-		false,          // exclusive
-		false,          // no-wait
-		nil,            // args
-	)
+	pub_channel, err := pqconn.Channel()
 	if err != nil {
-		log.Panicf("%s, failed to declare cancel queue", err)
+		log.Panicf("%s, failed declare channel", err)
 	}
+	defer pub_channel.Close()
 
-	requests, err := ch.Consume(
-		q.Name, // queue
-		"",     // consumer
-		false,  // auto-ack
-		false,  // exclusive
-		false,  // no-local
-		false,  // no-wait
-		nil,    // args
-	)
+	reqq, err := mq.NewMQueue(req_channel, "llm_q")
 	if err != nil {
-		log.Panicf("%s, failed to init consume proccess", err)
+		log.Panicf("%s, failed to declare queue", err)
 	}
 
-	cRequests, err := cch.Consume(
-		qCancel.Name, // queue
-		"",           // consumer
-		false,        // auto-ack
-		false,        // exclusive
-		false,        // no-local
-		false,        // no-wait
-		nil,          // args
-	)
+	cancelq, err := mq.NewMQueue(cancel_channel, "llm_cancel")
 	if err != nil {
-		log.Panicf("%s, failed to init consume proccess", err)
+		log.Panicf("%s, failed to declare queue", err)
 	}
-
-	err = ch.Qos(
-		1,     // prefetch count
-		0,     // prefetch size
-		false, // global
-	)
+	err = cancel_channel.QueueBind(cancelq.Name(), "", "llm_cancel_ex", false, nil)
 	if err != nil {
-		log.Panicf("%s, failed to init qos", err)
+		log.Panicf("%s, failed to bind queue", err)
 	}
 
-	for {
-		select {
-		case cRequest := <-cRequests:
-			_ = cRequest
-			// TODO: that way doesn't work
-			// go func() {
-			// 	log.Printf("Received a cancel request %s", cRequest.Body)
-			// 	llm.Cancel()
-			// 	cRequest.Ack(false)
-			// }()
+	llm_r, err := reqq.Consume()
+	if err != nil {
+		log.Panicf("%s, failed to start consume", err)
+	}
 
-		case request := <-requests:
+	llm_cancel, err := cancelq.Consume()
+	if err != nil {
+		log.Panicf("%s, failed to start consume", err)
+	}
+
+	wg := sync.WaitGroup{}
+	wg.Add(1)
+	go func() {
+		for {
+			cRequest := <-llm_cancel
+			log.Printf("Received a cancel request %s", cRequest.CorrelationId)
+			llm.Cancel(cRequest.CorrelationId)
+			cRequest.Ack(false)
+		}
+	}()
+
+	go func() {
+		for {
+			request := <-llm_r
 			log.Printf("Received a message: %s", request.Body)
-			err = pubch.Publish(
+			err = pub_channel.Publish(
 				"",              // exchange
 				request.ReplyTo, // routing key
 				false,           // mandatory
@@ -150,34 +128,18 @@ func main() {
 				})
 			if err != nil {
 				log.Printf("Error: %s", err)
+				request.Ack(false)
+				continue
 			}
 			log.Printf("Publish <start>")
 
-			output := func(b []byte, err error) {
+			output := func(b []byte, err error) error {
 				if err != nil {
 					log.Printf("Error: %s\n", err)
-					return
-				}
-				if b == nil {
-					err = pubch.Publish(
-						"",              // exchange
-						request.ReplyTo, // routing key
-						false,           // mandatory
-						false,           // immediate
-						amqp.Publishing{
-							ContentType:   "text/plain",
-							CorrelationId: request.CorrelationId,
-							Body:          []byte("<end>"),
-						})
-					if err != nil {
-						log.Printf("Error: %s", err)
-					}
-					log.Printf("Publish <end>")
-
-					return
+					return nil
 				}
 
-				err = pubch.Publish(
+				err = pub_channel.Publish(
 					"",              // exchange
 					request.ReplyTo, // routing key
 					false,           // mandatory
@@ -187,91 +149,42 @@ func main() {
 						CorrelationId: request.CorrelationId,
 						Body:          b,
 					})
+				log.Printf("next")
 				if err != nil {
 					log.Printf("Error: %s", err)
+					return err
 				}
+
+				return nil
 			}
 
-			err = llm.Proccess(string(request.Body), output)
+			stop, err := llm.ProccessNext(string(request.Body), request.CorrelationId, output)
 			if err != nil {
 				log.Printf("Error: %s", err)
+				request.Ack(false)
+				continue
 			}
+			<-stop
+
+			err = pub_channel.Publish(
+				"",              // exchange
+				request.ReplyTo, // routing key
+				false,           // mandatory
+				false,           // immediate
+				amqp.Publishing{
+					ContentType:   "text/plain",
+					CorrelationId: request.CorrelationId,
+					Body:          []byte("<end>"),
+				})
+			if err != nil {
+				log.Printf("Error: %s", err)
+				continue
+			}
+			log.Printf("Publish <end>")
 
 			request.Ack(false)
 		}
-	}
+	}()
 
-	// for request := range requests {
-	// 	log.Printf("Received a message: %s", request.Body)
-	// 	err = pubch.Publish(
-	// 		"",              // exchange
-	// 		request.ReplyTo, // routing key
-	// 		false,           // mandatory
-	// 		false,           // immediate
-	// 		amqp.Publishing{
-	// 			ContentType:   "text/plain",
-	// 			CorrelationId: request.CorrelationId,
-	// 			Body:          []byte("<start>"),
-	// 		})
-	// 	if err != nil {
-	// 		log.Printf("Error: %s", err)
-	// 	}
-
-	// 	output := func(b []byte, err error) {
-	// 		if err != nil {
-	// 			log.Printf("Error: %s\n", err)
-	// 			return
-	// 		}
-	// 		if b == nil {
-	// 			err = pubch.Publish(
-	// 				"",              // exchange
-	// 				request.ReplyTo, // routing key
-	// 				false,           // mandatory
-	// 				false,           // immediate
-	// 				amqp.Publishing{
-	// 					ContentType:   "text/plain",
-	// 					CorrelationId: request.CorrelationId,
-	// 					Body:          []byte("<end>"),
-	// 				})
-	// 			if err != nil {
-	// 				log.Printf("Error: %s", err)
-	// 			}
-
-	// 			return
-	// 		}
-
-	// 		log.Print(string(b))
-
-	// 		err = pubch.Publish(
-	// 			"",              // exchange
-	// 			request.ReplyTo, // routing key
-	// 			false,           // mandatory
-	// 			false,           // immediate
-	// 			amqp.Publishing{
-	// 				ContentType:   "text/plain",
-	// 				CorrelationId: request.CorrelationId,
-	// 				Body:          b,
-	// 			})
-	// 		if err != nil {
-	// 			log.Printf("Error: %s", err)
-	// 		}
-	// 	}
-
-	// 	err = llm.Proccess(string(request.Body), output)
-	// 	if err != nil {
-	// 		log.Printf("Error: %s", err)
-	// 	}
-
-	// 	request.Ack(false)
-	// }
-
-	// err = llm.Proccess("Привет. Как тебя зовут? Расскажи историю про грибы в лесу.", output)
-	// if err != nil {
-	// 	fmt.Printf("Error: %s\n", err)
-	// }
-
-	// err = llm.Proccess("Сколько будет 1 + 1?", output)
-	// if err != nil {
-	// 	fmt.Printf("Error: %s\n", err)
-	// }
+	wg.Wait()
 }

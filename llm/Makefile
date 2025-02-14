@@ -16,4 +16,10 @@ build-cpu:
 	cmake --build ./deps/llama.cpp/build --config Release -j $(nproc)
 
 run:
-	LD_LIBRARY_PATH=deps/llama.cpp/build/bin MODEL_PATH=/home/sol/programming/ai/models/SAINEMO-reMIX.i1-Q6_K.gguf ./cmd/llm
+	LD_LIBRARY_PATH=deps/llama.cpp/build/bin \
+	MODEL_PATH=/home/sol/programming/ai/models/SAINEMO-reMIX.i1-Q6_K.gguf \
+	MQ_USER=admin \
+	MQ_PASSWORD=admin \
+	MQ_HOST=localhost \
+	MQ_PORT=5672 \
+	./cmd/cmd
