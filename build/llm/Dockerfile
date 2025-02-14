@@ -15,6 +15,7 @@ RUN cmake -S ./llm/deps/llama.cpp -B ./llm/deps/llama.cpp/build -DCMAKE_BUILD_TY
 RUN mkdir -p /project/lib && \
     find llm/deps/llama.cpp/build -name "*.so" -exec cp {} /project/lib \;
 
+RUN go mod tidy -C ./llm
 RUN go build -C ./llm/cmd -o llm
 
 FROM ubuntu:22.04
