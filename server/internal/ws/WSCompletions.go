@@ -9,9 +9,9 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
-	amqp "github.com/rabbitmq/amqp091-go"
 	"github.com/soulnvkz/log"
-	"github.com/soulnvkz/mq"
+	domain "github.com/soulnvkz/mq/domain"
+	mqc "github.com/soulnvkz/server/internal/mq"
 )
 
 type Message struct {
@@ -44,8 +44,7 @@ type WSCompletions struct {
 	mu           *sync.Mutex
 	streamCancel *context.CancelFunc
 
-	completions_channel *amqp.Channel
-	publish_channel     *amqp.Channel
+	mqcompletions *mqc.MQCompletions
 }
 
 const (
@@ -53,20 +52,19 @@ const (
 )
 
 func NewWSCompletions(
+	ctx context.Context,
 	c *websocket.Conn,
-	completitons_channel, publish_channel *amqp.Channel,
-	ctx context.Context) *WSCompletions {
+	mqcomp *mqc.MQCompletions) *WSCompletions {
 	nctx, cancel := context.WithCancel(ctx)
 
 	return &WSCompletions{
-		c:                   c,
-		ctx:                 nctx,
-		cancel:              cancel,
-		pingTicker:          time.NewTicker(PING_DELAY),
-		completions_channel: completitons_channel,
-		publish_channel:     publish_channel,
-		mu:                  &sync.Mutex{},
-		streamCancel:        nil,
+		c:             c,
+		ctx:           nctx,
+		cancel:        cancel,
+		pingTicker:    time.NewTicker(PING_DELAY),
+		mqcompletions: mqcomp,
+		mu:            &sync.Mutex{},
+		streamCancel:  nil,
 	}
 }
 
@@ -147,97 +145,37 @@ func (socket *WSCompletions) handleCompletions(message *Message) {
 			socket.mu.Unlock()
 		}()
 
-		respq, err := mq.NewMQueue(socket.completions_channel, "")
+		q, err := socket.mqcompletions.NewCompletionsQueue()
 		if err != nil {
-			log.Error().Printf("failed to declare queue")
-			return
-		}
-
-		responses, err := respq.Consume()
-		if err != nil {
-			log.Error().Printf("failed initilize consume %s", err)
+			log.Error().Printf("failed to declare queue, %s", err)
 			return
 		}
 
 		err = socket.writeQueueCompletions()
 		if err != nil {
-			log.Error().Printf("failed to response %s", err)
+			log.Error().Printf("failed to response, %s", err)
 			return
 		}
 
 		request_id := uuid.New().String()
+		request := domain.CompletionsRequest{
+			RequestID: request_id,
+			Content:   message.Content,
+		}
 
-		err = socket.publish_channel.ExchangeDeclare(
-			"llm_cancel_ex",
-			"fanout",
-			false,
-			true,
-			false,
-			false,
-			nil,
-		)
+		err = socket.mqcompletions.RequestCompletions(ctx, q, request)
 		if err != nil {
-			log.Error().Printf("failed declare channel %s", err)
+			log.Error().Printf("failed publish, %s", err)
 			return
 		}
 
-		err = socket.publish_channel.PublishWithContext(ctx,
-			"",      // exchange
-			"llm_q", // routing key
-			false,   // mandatory
-			false,   // immediate
-			amqp.Publishing{
-				ContentType:   "text/plain",
-				CorrelationId: request_id,
-				ReplyTo:       respq.Name(),
-				Body:          []byte(message.Content),
-			})
+		err = socket.mqcompletions.ConsumeCompletions(ctx, q, &WSConsumer{
+			requestID: request_id,
+			socket:    socket,
+		})
 		if err != nil {
-			log.Error().Printf("failed publish %s", err)
+			log.Error().Printf("failed to start consume, %s", err)
 			return
-		}
-
-	loop:
-		for {
-			select {
-			case <-ctx.Done():
-				// proccess already started and can be canceled exacly that proccess
-				err = socket.publish_channel.PublishWithContext(ctx,
-					"llm_cancel_ex", // exchange
-					"",              // routing key
-					false,           // mandatory
-					false,           // immediate
-					amqp.Publishing{
-						ContentType:   "text/plain",
-						CorrelationId: request_id,
-						Body:          []byte(message.Content),
-					})
-				if err != nil {
-					log.Error().Printf("failed publish %s", err)
-					return
-				}
-				break loop
-			case d := <-responses:
-				if request_id == d.CorrelationId {
-					str := string(d.Body)
-					if str == "<start>" {
-						err = socket.writeStartCompletions()
-						if err != nil {
-							break loop
-						}
-						continue loop
-					}
-					if str == "<end>" {
-						socket.writeEndCompletions()
-						break loop
-					}
-
-					err = socket.writeCompletions(d.Body)
-					if err != nil {
-						break loop
-					}
-				}
-			}
 		}
 	}()
 }

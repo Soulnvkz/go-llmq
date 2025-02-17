@@ -11,7 +11,8 @@ import (
 	"github.com/gorilla/websocket"
 	"github.com/soulnvkz/log"
 	"github.com/soulnvkz/mq"
-	"github.com/soulnvkz/server/internal/ws"
+	mqc "github.com/soulnvkz/server/internal/mq"
+	wsc "github.com/soulnvkz/server/internal/ws"
 )
 
 func Getenv(env string) (v string) {
@@ -86,27 +87,21 @@ func main() {
 	router.HandleFunc("/completions", func(w http.ResponseWriter, r *http.Request) {
 		websocket, err := upgrader.Upgrade(w, r, nil)
 		if err != nil {
-			log.Error().Println(err)
+			log.Error().Print(err)
 		}
 
 		websocket.SetCloseHandler(func(code int, text string) error {
-			log.Error().Printf("Closing ws connection. Code: %d, text:%s", code, text)
+			log.Info().Printf("closing ws connection. Code: %d, text:%s", code, text)
 			return nil
 		})
 
-		complitions_channel, err := qconn.Channel()
+		mqcompeltions, err := mqc.NewMQCompletions(qconn, pqconn)
 		if err != nil {
-			log.Error().Printf("%s, failed to create channel", err)
+			log.Error().Print(err)
 		}
-		defer complitions_channel.Close()
+		defer mqcompeltions.Close()
 
-		publish_channel, err := pqconn.Channel()
-		if err != nil {
-			log.Error().Printf("%s, failed to create channel", err)
-		}
-		defer publish_channel.Close()
-
-		socket := ws.NewWSCompletions(websocket, complitions_channel, publish_channel, r.Context())
+		socket := wsc.NewWSCompletions(r.Context(), websocket, mqcompeltions)
 		defer socket.Close()
 
 		socket.HandleMessages()
