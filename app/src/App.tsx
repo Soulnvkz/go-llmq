@@ -4,7 +4,7 @@ import './App.css'
 import Button from './components/button/button'
 import Message from './components/message/message'
 import MessagesContainer from './components/message/messagesContainer'
-import { CompletitionsEnd, CompletitionsMessage, CompletitionsNext, CompletitionsStart, useWebSocket, WSMessage } from './hooks/useWebSocket'
+import { CancelMessage, CompletitionsEnd, CompletitionsMessage, CompletitionsNext, CompletitionsQueue, CompletitionsStart, useWebSocket, WSMessage } from './hooks/useWebSocket'
 
 
 
@@ -18,53 +18,35 @@ function App() {
   const { send } = useWebSocket({
     path: "/ws/completions",
     onMessage: (message: WSMessage) => {
-      if(message.message_type === CompletitionsStart) {
-        currentRef.current!.innerHTML = "<span></span>"
-        currentRef.current!.style.display = "block"
-        return
+      switch (message.message_type) {
+        case CompletitionsQueue:
+          currentRef.current!.innerHTML = "<span>queue...</span>"
+          currentRef.current!.style.display = "block"
+          break;
+        case CompletitionsStart:
+          currentRef.current!.innerHTML = "<span></span>"
+          currentRef.current!.style.display = "block"
+          break;
+        case CompletitionsNext:
+          if (currentRef.current) {
+            currentRef.current.innerHTML = "<span>" + currentRef.current.innerHTML.replace("<span>", "").replace("</span>", "") + message.content! + "</span>"
+          }
+          break;
+        case CompletitionsEnd:
+          index.current = index.current + 1;
+          const text = currentRef.current!.innerHTML.replace("<span>", "").replace("</span>", "")
+          currentRef.current!.innerHTML = "<span></span>"
+          currentRef.current!.style.display = "none"
+          setMessages(prev => [...prev, {
+            id: index.current,
+            isUser: false,
+            text: text
+          }]);
+          break;
+        default:
+          console.info("unsupported message type", message.message_type);
+          break;
       }
-
-      if(message.message_type === CompletitionsNext) {
-        if (currentRef.current) {
-          currentRef.current.innerHTML = "<span>" + currentRef.current.innerHTML.replace("<span>", "").replace("</span>", "") + message.content! + "</span>"
-        }
-      }
-
-      if(message.message_type === CompletitionsEnd) {
-        index.current = index.current + 1;
-        const text = currentRef.current!.innerHTML.replace("<span>", "").replace("</span>", "")
-        currentRef.current!.innerHTML = "<span></span>"
-        currentRef.current!.style.display = "none"
-        setMessages(prev => [...prev, {
-          id: index.current,
-          isUser: false,
-          text: text
-        }]);
-
-        return
-      }
-      
-      // if (message === "<start>") {
-      //   currentRef.current!.innerHTML = "<span></span>"
-      //   currentRef.current!.style.display = "block"
-      //   return
-      // }
-      // if (message === "<end>") {
-      //   index.current = index.current + 1;
-      //   const text = currentRef.current!.innerHTML.replace("<span>", "").replace("</span>", "")
-      //   currentRef.current!.innerHTML = "<span></span>"
-      //   currentRef.current!.style.display = "none"
-      //   setMessages(prev => [...prev, {
-      //     id: index.current,
-      //     isUser: false,
-      //     text: text
-      //   }]);
-
-      //   return
-      // }
-      // if (currentRef.current) {
-      //   currentRef.current.innerHTML = "<span>" + currentRef.current.innerHTML.replace("<span>", "").replace("</span>", "") + message + "</span>"
-      // }
     }
   })
 
@@ -87,6 +69,11 @@ function App() {
 
       <div className="input-container">
         <input ref={inputRef} type="text" className="message-input" placeholder="Type your message..." />
+        <Button text="Cancel" onClick={() => {
+          send(JSON.stringify({
+            message_type: CancelMessage,
+          }));
+        }} />
         <Button text="Send" onClick={() => {
           const message = inputRef.current!.value
           if (message.length === 0) {
