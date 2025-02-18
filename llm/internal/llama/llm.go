@@ -12,6 +12,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"math/rand"
 	"sync"
 	"time"
 	"unsafe"
@@ -103,13 +104,20 @@ func (llm *LLM) initilizeContext() error {
 }
 
 func (llm *LLM) initilizeSampler() error {
+
 	sparams := C.llama_sampler_chain_default_params()
 	sparams.no_perf = false
+
 	smpl := C.llama_sampler_chain_init(sparams)
 	if smpl == nil {
 		return fmt.Errorf("can't initiliize sampler")
 	}
-	C.llama_sampler_chain_add(smpl, C.llama_sampler_init_greedy())
+
+	seed := rand.Uint32()
+	// C.llama_sampler_chain_add(smpl, C.llama_sampler_init_greedy())
+	C.llama_sampler_chain_add(smpl, C.llama_sampler_init_temp(C.float(0.8)))
+	C.llama_sampler_chain_add(smpl, C.llama_sampler_init_min_p(C.float(0.05), C.size_t(1)))
+	C.llama_sampler_chain_add(smpl, C.llama_sampler_init_dist(C.uint32_t(seed)))
 
 	llm.smpl = smpl
 	return nil
