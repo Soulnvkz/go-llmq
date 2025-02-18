@@ -13,10 +13,22 @@ import (
 	"fmt"
 	"log"
 	"sync"
+	"time"
 	"unsafe"
+
+	"github.com/soulnvkz/llm/internal/utils"
 )
 
+type Consumer interface {
+	OnNext([]byte) error
+}
+
 type LLM struct {
+	app_ctx context.Context
+	mu      sync.Mutex
+
+	cancel_list *utils.CancellationTokensCache
+
 	model     *C.struct_llama_model
 	vocab     *C.struct_llama_vocab
 	ctx       *C.struct_llama_context
@@ -24,29 +36,27 @@ type LLM struct {
 	n_predict int
 	n_ctx     int
 	n_batch   int
-
-	mu         sync.Mutex
-	cancelList map[string]struct {
-		cancel *context.CancelFunc
-		ctx    *context.Context
-	}
 }
 
-func NewLLM() *LLM {
+func NewLLM(ctx context.Context) *LLM {
+	cl := utils.NewCancellationTokensCache(
+		ctx,
+		30*time.Minute,
+		5*time.Minute)
+
 	return &LLM{
+		app_ctx: ctx,
+
 		n_predict: 1024,
 		n_ctx:     4096,
 		n_batch:   512,
 
-		mu: sync.Mutex{},
-		cancelList: map[string]struct {
-			cancel *context.CancelFunc
-			ctx    *context.Context
-		}{},
+		mu:          sync.Mutex{},
+		cancel_list: cl,
 	}
 }
 
-func (llm *LLM) load_model(model_path string) error {
+func (llm *LLM) loadModel(model_path string) error {
 	if llm.model != nil {
 		return fmt.Errorf("model has initilized already")
 	}
@@ -72,7 +82,7 @@ func (llm *LLM) load_model(model_path string) error {
 	return nil
 }
 
-func (llm *LLM) initilize_context() error {
+func (llm *LLM) initilizeContext() error {
 	// initialize the context
 
 	ctx_params := C.llama_context_default_params()
@@ -92,7 +102,7 @@ func (llm *LLM) initilize_context() error {
 	return nil
 }
 
-func (llm *LLM) initilize_sampler() error {
+func (llm *LLM) initilizeSampler() error {
 	sparams := C.llama_sampler_chain_default_params()
 	sparams.no_perf = false
 	smpl := C.llama_sampler_chain_init(sparams)
@@ -105,7 +115,7 @@ func (llm *LLM) initilize_sampler() error {
 	return nil
 }
 
-func (llm *LLM) tokenize_promtp(prompt string) (int, []C.llama_token, error) {
+func (llm *LLM) tokenizePromtp(prompt string) (int, []C.llama_token, error) {
 	// find the number of tokens in the prompt
 	n_prompt := int(-C.llama_tokenize(llm.vocab, C.CString(prompt), C.int(len(prompt)), nil, 0, true, true))
 	prompt_tokens := make([]C.llama_token, n_prompt)
@@ -119,15 +129,15 @@ func (llm *LLM) tokenize_promtp(prompt string) (int, []C.llama_token, error) {
 func (llm *LLM) Initilize(model string) error {
 	// init backend
 	C.ggml_backend_load_all()
-	err := llm.load_model(model)
+	err := llm.loadModel(model)
 	if err != nil {
 		return err
 	}
-	err = llm.initilize_context()
+	err = llm.initilizeContext()
 	if err != nil {
 		return err
 	}
-	err = llm.initilize_sampler()
+	err = llm.initilizeSampler()
 	if err != nil {
 		return err
 	}
@@ -149,48 +159,41 @@ func (llm *LLM) Clean() error {
 }
 
 func (llm *LLM) Cancel(req_id string) {
-	c, ok := llm.cancelList[req_id]
+	c, ok := llm.cancel_list.Get(req_id)
 	if !ok {
 		log.Printf("Cancel: adding ctx for %s", req_id)
-		ctx, cancel := context.WithCancel(context.Background())
-		llm.cancelList[req_id] = struct {
-			cancel *context.CancelFunc
-			ctx    *context.Context
-		}{
-			ctx:    &ctx,
-			cancel: &cancel,
-		}
+		ctx, cancel := context.WithCancel(llm.app_ctx)
+
+		llm.cancel_list.Put(req_id, &utils.CancelToken{
+			Ctx:    &ctx,
+			Cancel: &cancel,
+		})
 		return
 	}
 
 	log.Printf("Cancel: ctx %s already exists, call cancel", req_id)
-	(*c.cancel)()
-
-	// TODO: clean map
+	(*c.Cancel)()
 }
 
-func (llm *LLM) ProccessNext(prompt string, req_id string, on_next func([]byte, error) error) (chan bool, error) {
-	n_prompt, prompt_tokens, err := llm.tokenize_promtp(prompt)
+func (llm *LLM) Proccess(ctx context.Context, prompt string, req string) (chan []byte, chan bool, error) {
+	n_prompt, prompt_tokens, err := llm.tokenizePromtp(prompt)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
-	_, ok := llm.cancelList[req_id]
-	var ctx context.Context
+	_, ok := llm.cancel_list.Get(req)
+	var req_ctx context.Context
 	var cancel context.CancelFunc
 	if !ok {
-		log.Printf("ProccessNext: adding ctx for %s", req_id)
-		ctx, cancel = context.WithCancel(context.Background())
-		llm.cancelList[req_id] = struct {
-			cancel *context.CancelFunc
-			ctx    *context.Context
-		}{
-			ctx:    &ctx,
-			cancel: &cancel,
-		}
+		log.Printf("ProccessNext: adding ctx for %s", req)
+		req_ctx, cancel = context.WithCancel(llm.app_ctx)
+		llm.cancel_list.Put(req, &utils.CancelToken{
+			Ctx:    &ctx,
+			Cancel: &cancel,
+		})
 	} else {
-		log.Printf("ProccessNext: ctx %s already exists", req_id)
-		return nil, errors.New("request has canceled already")
+		log.Printf("ProccessNext: ctx %s already exists", req)
+		return nil, nil, errors.New("request has canceled already")
 	}
 
 	batch := C.llama_batch_get_one(&prompt_tokens[0], C.int(len(prompt_tokens)))
@@ -199,10 +202,14 @@ func (llm *LLM) ProccessNext(prompt string, req_id string, on_next func([]byte, 
 
 	n_pos := 0
 	stop := make(chan bool)
+	next := make(chan []byte)
 	go func() {
 	loop:
 		for {
 			select {
+			case <-req_ctx.Done():
+				stop <- true
+				break loop
 			case <-ctx.Done():
 				stop <- true
 				break loop
@@ -213,7 +220,7 @@ func (llm *LLM) ProccessNext(prompt string, req_id string, on_next func([]byte, 
 				}
 				// evaluate the current batch with the transformer model
 				if C.llama_decode(llm.ctx, batch) > 0 {
-					on_next(nil, fmt.Errorf("failed to eval current batch"))
+					log.Printf("failed to eval current batch")
 					stop <- true
 					break loop
 				}
@@ -233,23 +240,18 @@ func (llm *LLM) ProccessNext(prompt string, req_id string, on_next func([]byte, 
 
 				n := C.llama_token_to_piece(llm.vocab, new_token_id, &buf[0], C.int(len(buf)), 0, true)
 				if n < 0 {
-					on_next(nil, fmt.Errorf("failed to convert token to piece"))
+					log.Printf("failed to convert token to piece")
 					stop <- true
 					break loop
 				}
 				cstr := (*C.char)(unsafe.Pointer(&buf[0])) // Get pointer to the first element
-				err = on_next([]byte(C.GoString(cstr)), nil)
-				if err != nil {
-					stop <- true
-					break loop
-				}
+				next <- []byte(C.GoString(cstr))
 				// prepare the next batch with the sampled token
 				batch = C.llama_batch_get_one(&new_token_id, 1)
-
 				n_decode += 1
 			}
 		}
 	}()
 
-	return stop, nil
+	return next, stop, nil
 }

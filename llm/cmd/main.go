@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"log"
 	"os"
 
@@ -28,7 +29,7 @@ func main() {
 	mq_cancel_ex := Getenv("MQ_CANCEL_EX")
 	mq_llm_q := Getenv("MQ_LLM_Q")
 
-	llm := llama.NewLLM()
+	llm := llama.NewLLM(context.Background())
 	llm.Initilize(model)
 	defer llm.Clean()
 
@@ -53,7 +54,17 @@ func main() {
 	}
 	defer mqllm.Close()
 
-	if err = mqllm.Consume(llm); err != nil {
-		log.Panicf("%s, failed to start consume", err)
+	ctx := context.WithoutCancel(context.Background())
+
+	completionsDone, err := mqllm.ConsumeCompletionsRequests(ctx, llm)
+	if err != nil {
+		log.Panicf("%s, failed to start consume completions", err)
 	}
+	cancellationsDone, err := mqllm.ConsumeCancellations(ctx, llm)
+	if err != nil {
+		log.Panicf("%s, failed to start consume cancellations", err)
+	}
+
+	<-completionsDone
+	<-cancellationsDone
 }
