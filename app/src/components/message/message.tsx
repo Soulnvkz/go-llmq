@@ -1,29 +1,20 @@
-import React from "react";
+import React from "react"
+
 import style from "./message.module.scss"
 
 interface MessageProps {
-    isUser: boolean;
-    text?: string;
-    last?: boolean;
+    isUser: boolean
+    text?: string
 }
 
-const Message = React.forwardRef(function({text, isUser, last = false}: MessageProps, ref: React.Ref<HTMLDivElement>) {
-    let messageStyle = `${style.message}`
-    if(isUser){
-        messageStyle+=` ${style.user}`;
-    }else{
-        messageStyle+=` ${style.bot}`;
-    }
-
-    let stylex = {}
-    if(last) {
-        stylex = {
-            display:"none"
-        }
+const Message = React.forwardRef(function({text, isUser}: MessageProps, ref: React.Ref<HTMLDivElement>) {
+    const classes = `${style.message} ${isUser ? style.user: style.bot}`
+    if(!text || text.length === 0) {
+        return
     }
 
     return (
-       <div ref={ref} style={stylex} className={messageStyle}>
+       <div ref={ref} className={classes}>
             <span>{text}</span>
        </div>
     )

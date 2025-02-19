@@ -17,7 +17,7 @@ build-cpu:
 
 run:
 	LD_LIBRARY_PATH=deps/llama.cpp/build/bin \
-	MODEL_PATH=/home/sol/programming/ai/models/SAINEMO-reMIX.i1-Q6_K.gguf \
+	MODEL_PATH=/home/sol/programming/ai/models/Llama-3.2-1B-Instruct-Q6_K.gguf \
 	MQ_USER=admin \
 	MQ_PASSWORD=admin \
 	MQ_HOST=localhost \

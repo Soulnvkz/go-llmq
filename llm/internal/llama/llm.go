@@ -48,7 +48,7 @@ func NewLLM(ctx context.Context) *LLM {
 	return &LLM{
 		app_ctx: ctx,
 
-		n_predict: 1024,
+		n_predict: 128,
 		n_ctx:     4096,
 		n_batch:   512,
 

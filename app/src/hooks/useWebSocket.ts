@@ -2,7 +2,9 @@ import { useEffect, useRef } from "react";
 
 interface Params {
     path: string;
+
     onMessage: (message: WSMessage) => void;
+    onError?: () => void;
 }
 
 export interface WSMessage {
@@ -23,6 +25,7 @@ export const CompletitionsQueue = 5
 export function useWebSocket({
     path,
     onMessage,
+    onError,
 }: Params) {
     const socket = useRef<WebSocket | null>(null);
     const pingTimeout = useRef<number>(0);
@@ -48,9 +51,8 @@ export function useWebSocket({
                 socket.current = null;
             }
             socket.current.onmessage = function (e) {
-                console.info("ws got message...", e.data);
                 const message = JSON.parse(e.data) as WSMessage;
-
+                // console.log("ws got message", message.message_type, message.content)
                 if (message.message_type == PongMessage) {
                     pingTimeout.current = setTimeout(() => {
                         socket.current!.send(JSON.stringify({
@@ -64,6 +66,7 @@ export function useWebSocket({
             }
             socket.current.onerror = function (_) {
                 console.error("ws error...");
+                if (onError) onError()
             }
         }
 
