@@ -29,6 +29,53 @@ export function useWebSocket({
 }: Params) {
     const socket = useRef<WebSocket | null>(null);
     const pingTimeout = useRef<number>(0);
+    const reconnectInterval = useRef<number>(0);
+
+    function newConnection() {
+        socket.current = new WebSocket(path)
+        socket.current.onopen = function (_) {
+            console.info("ws opened...");
+            clearInterval(reconnectInterval.current)
+
+            // starting ping/pong messaging
+            socket.current!.send(JSON.stringify({
+                message_type: PingMessage
+            }));
+        }
+        socket.current.onclose = function () {
+            console.info("ws closed...");
+            
+            clearTimeout(pingTimeout.current)
+            socket.current = null;
+
+            clearInterval(reconnectInterval.current)
+            reconnectInterval.current = setInterval(() => {
+                if(!socket.current || socket.current.CLOSED) {
+                    newConnection()
+                }
+            }, 1000)
+        }
+        socket.current.onmessage = function (e) {
+            const message = JSON.parse(e.data) as WSMessage;
+            console.log("ws got", e.data)
+            if (message.message_type == PongMessage) {
+                pingTimeout.current = setTimeout(() => {
+                    socket.current!.send(JSON.stringify({
+                        message_type: PingMessage
+                    }));
+                }, 1000);
+                return;
+            }
+
+            onMessage(message);
+        }
+        socket.current.onerror = function (_) {
+            console.error("ws error...");
+            clearInterval(reconnectInterval.current)
+
+            if (onError) onError()
+        }
+    }
 
     useEffect(() => {
         if (socket.current != null) {
@@ -36,41 +83,11 @@ export function useWebSocket({
         }
 
         window.onload = function () {
-            socket.current = new WebSocket(path)
-            socket.current.onopen = function (_) {
-                console.info("ws opened...");
-
-                // starting ping/pong messaging
-                socket.current!.send(JSON.stringify({
-                    message_type: PingMessage
-                }));
-            }
-            socket.current.onclose = function (_) {
-                console.info("ws closed...");
-                clearTimeout(pingTimeout.current)
-                socket.current = null;
-            }
-            socket.current.onmessage = function (e) {
-                const message = JSON.parse(e.data) as WSMessage;
-                // console.log("ws got message", message.message_type, message.content)
-                if (message.message_type == PongMessage) {
-                    pingTimeout.current = setTimeout(() => {
-                        socket.current!.send(JSON.stringify({
-                            message_type: PingMessage
-                        }));
-                    }, 1000);
-                    return;
-                }
-
-                onMessage(message);
-            }
-            socket.current.onerror = function (_) {
-                console.error("ws error...");
-                if (onError) onError()
-            }
+            newConnection()
         }
 
         return () => {
+            clearInterval(reconnectInterval.current)
             if (socket.current == null) {
                 return;
             }
