@@ -3,9 +3,10 @@ package domain
 import "encoding/json"
 
 type CompletionsRequest struct {
-	RequestID string `json:"request_id"`
-	Content   string `json:"content,omitempty"`
-	ChatID    string `json:"chat_id,omitempty"`
+	RequestID    string        `json:"request_id"`
+	Content      string        `json:"content,omitempty"`
+	ChatMessages []ChatMessage `json:"chat_messages,omitempty"`
+	ChatID       string        `json:"chat_id,omitempty"`
 }
 
 func (r CompletionsRequest) Marshal() ([]byte, error) {

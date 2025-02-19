@@ -56,7 +56,9 @@ func main() {
 
 	ctx := context.WithoutCancel(context.Background())
 
-	completionsDone, err := mqllm.ConsumeCompletionsRequests(ctx, llm)
+	pbuilder := llama.NewPromptBuilder(llm)
+
+	completionsDone, err := mqllm.ConsumeCompletionsRequests(ctx, pbuilder, llm)
 	if err != nil {
 		log.Panicf("%s, failed to start consume completions", err)
 	}

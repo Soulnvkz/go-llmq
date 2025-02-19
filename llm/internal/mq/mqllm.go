@@ -5,6 +5,7 @@ import (
 	"log"
 
 	amqp "github.com/rabbitmq/amqp091-go"
+	"github.com/soulnvkz/llm/internal/llama"
 	"github.com/soulnvkz/mq"
 	"github.com/soulnvkz/mq/domain"
 )
@@ -107,7 +108,7 @@ func (llmq *MQllm) reply(replyTo string, resp domain.CompletionsResponse) error 
 	return nil
 }
 
-func (llmq *MQllm) ConsumeCompletionsRequests(ctx context.Context, d ResponseGenerator) (<-chan bool, error) {
+func (llmq *MQllm) ConsumeCompletionsRequests(ctx context.Context, pbuilder llama.PromptBuilder, d ResponseGenerator) (<-chan bool, error) {
 	llm_r, err := llmq.reqQ.Consume()
 	if err != nil {
 		return nil, err
@@ -122,11 +123,12 @@ func (llmq *MQllm) ConsumeCompletionsRequests(ctx context.Context, d ResponseGen
 				done <- true
 				break main_loop
 			case req := <-llm_r:
+				req.Ack(false)
+
 				cr := domain.CompletionsRequest{}
 				err := cr.UnMarshal(req.Body)
 				if err != nil {
 					log.Printf("%s, unsupported request data", err)
-					req.Ack(false)
 					continue
 				}
 
@@ -136,15 +138,19 @@ func (llmq *MQllm) ConsumeCompletionsRequests(ctx context.Context, d ResponseGen
 				})
 				if err != nil {
 					log.Printf("%s, failed to reply", err)
-					req.Ack(false)
+					continue
+				}
+
+				prompt, err := pbuilder.Build(cr.ChatMessages, cr.Content)
+				if err != nil {
+					log.Printf("%s, failed to build prompt", err)
 					continue
 				}
 
 				req_ctx, cancel := context.WithCancel(ctx)
-				next, stop, err := d.Proccess(req_ctx, cr.Content, cr.RequestID)
+				next, stop, err := d.Proccess(req_ctx, prompt, cr.RequestID)
 				if err != nil {
 					log.Printf("%s, failed to start generation", err)
-					req.Ack(false)
 					cancel()
 					continue
 				}
@@ -160,12 +166,10 @@ func (llmq *MQllm) ConsumeCompletionsRequests(ctx context.Context, d ResponseGen
 						if err != nil {
 							log.Printf("%s, failed to reply", err)
 							cancel()
-							req.Ack(false)
 							break proccess_loop
 						}
 						break proccess_loop
 					case buff := <-next:
-						log.Printf("%s next", req.CorrelationId)
 						err = llmq.reply(req.ReplyTo, domain.CompletionsResponse{
 							RequestID: req.CorrelationId,
 							Content:   string(buff),
@@ -174,14 +178,11 @@ func (llmq *MQllm) ConsumeCompletionsRequests(ctx context.Context, d ResponseGen
 						if err != nil {
 							log.Printf("%s, failed to reply", err)
 							cancel()
-							req.Ack(false)
 							break proccess_loop
 						}
 					}
 				}
-
 				cancel()
-				req.Ack(false)
 			}
 		}
 	}()

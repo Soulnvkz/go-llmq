@@ -11,6 +11,7 @@ import (
 	"github.com/gorilla/websocket"
 	"github.com/soulnvkz/log"
 	domain "github.com/soulnvkz/mq/domain"
+	"github.com/soulnvkz/server/internal/chat"
 	mqc "github.com/soulnvkz/server/internal/mq"
 )
 
@@ -45,6 +46,7 @@ type WSCompletions struct {
 	streamCancel *context.CancelFunc
 
 	mqcompletions *mqc.MQCompletions
+	chat          *chat.ChatContext
 }
 
 const (
@@ -54,7 +56,8 @@ const (
 func NewWSCompletions(
 	ctx context.Context,
 	c *websocket.Conn,
-	mqcomp *mqc.MQCompletions) *WSCompletions {
+	mqcomp *mqc.MQCompletions,
+	chat *chat.ChatContext) *WSCompletions {
 	nctx, cancel := context.WithCancel(ctx)
 
 	return &WSCompletions{
@@ -63,6 +66,7 @@ func NewWSCompletions(
 		cancel:        cancel,
 		pingTicker:    time.NewTicker(PING_DELAY),
 		mqcompletions: mqcomp,
+		chat:          chat,
 		mu:            &sync.Mutex{},
 		streamCancel:  nil,
 	}
@@ -113,7 +117,7 @@ func (socket *WSCompletions) handleStreamCancel() {
 	socket.mu.Unlock()
 }
 
-func (socket *WSCompletions) handleCompletions(message *Message) {
+func (socket *WSCompletions) handleCompletions(message Message) {
 	if len(message.Content) == 0 {
 		log.Info().Println("content is required for completitions")
 		err := socket.writeError(errors.New("content is required for completitions"))
@@ -163,8 +167,9 @@ func (socket *WSCompletions) handleCompletions(message *Message) {
 
 		request_id := uuid.New().String()
 		request := domain.CompletionsRequest{
-			RequestID: request_id,
-			Content:   message.Content,
+			RequestID:    request_id,
+			ChatMessages: socket.chat.Messages,
+			Content:      message.Content,
 		}
 
 		err = socket.mqcompletions.RequestCompletions(ctx, q, request)
@@ -173,10 +178,8 @@ func (socket *WSCompletions) handleCompletions(message *Message) {
 			return
 		}
 
-		err = socket.mqcompletions.ConsumeCompletions(ctx, q, &WSConsumer{
-			requestID: request_id,
-			socket:    socket,
-		})
+		consumer := NewWSConsumer(request_id, socket, []byte(message.Content))
+		err = socket.mqcompletions.ConsumeCompletions(ctx, q, consumer)
 		if err != nil {
 			log.Error().Printf("failed to start consume, %s", err)
 			return
@@ -202,7 +205,7 @@ func (socket *WSCompletions) handleMessage(buff []byte) {
 	case message.MessageType == CancelMessage:
 		socket.handleStreamCancel()
 	case message.MessageType == CompletitionsMessage:
-		socket.handleCompletions(&message)
+		socket.handleCompletions(message)
 	default:
 		log.Info().Printf("unssuported message")
 		err = socket.writeError(errors.New("unssuported message"))

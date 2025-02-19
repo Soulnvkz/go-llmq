@@ -11,6 +11,7 @@ import (
 	"github.com/gorilla/websocket"
 	"github.com/soulnvkz/log"
 	"github.com/soulnvkz/mq"
+	"github.com/soulnvkz/server/internal/chat"
 	mqc "github.com/soulnvkz/server/internal/mq"
 	wsc "github.com/soulnvkz/server/internal/ws"
 )
@@ -101,7 +102,11 @@ func main() {
 		}
 		defer mqcompeltions.Close()
 
-		socket := wsc.NewWSCompletions(r.Context(), websocket, mqcompeltions)
+		// for now chat and connection is the same. Every new connection creating new chat context
+		// TODO: implement chat storage via db/files/redis/whatever
+		chatContext := chat.NewChatContext()
+
+		socket := wsc.NewWSCompletions(r.Context(), websocket, mqcompeltions, chatContext)
 		defer socket.Close()
 
 		socket.HandleMessages()

@@ -10,6 +10,17 @@ import (
 type WSConsumer struct {
 	requestID string
 	socket    *WSCompletions
+	message   []byte
+	userm     []byte
+}
+
+func NewWSConsumer(reqID string, s *WSCompletions, userm []byte) *WSConsumer {
+	return &WSConsumer{
+		requestID: reqID,
+		socket:    s,
+		userm:     userm,
+		message:   make([]byte, 0, 1024),
+	}
 }
 
 func (c *WSConsumer) OnDone() error {
@@ -28,10 +39,20 @@ func (c *WSConsumer) OnNext(r domain.CompletionsResponse) error {
 			return err
 		}
 	case r.ResType == domain.CompletionsEnd:
+		c.socket.chat.Add(domain.ChatMessage{
+			Role:    "user",
+			Content: string(c.userm),
+		})
+		c.socket.chat.Add(domain.ChatMessage{
+			Role:    "assistant",
+			Content: string(c.message),
+		})
 		c.socket.writeEndCompletions()
 		return io.EOF
 	case r.ResType == domain.CompletionsNext:
-		if err := c.socket.writeCompletions([]byte(r.Content)); err != nil {
+		buff := []byte(r.Content)
+		c.message = append(c.message, buff...)
+		if err := c.socket.writeCompletions(buff); err != nil {
 			return err
 		}
 	default:

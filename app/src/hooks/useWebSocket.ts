@@ -57,7 +57,7 @@ export function useWebSocket({
         }
         socket.current.onmessage = function (e) {
             const message = JSON.parse(e.data) as WSMessage;
-            console.log("ws got", e.data)
+            console.debug("ws got", e.data)
             if (message.message_type == PongMessage) {
                 pingTimeout.current = setTimeout(() => {
                     socket.current!.send(JSON.stringify({

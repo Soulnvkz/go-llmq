@@ -48,9 +48,11 @@ func NewLLM(ctx context.Context) *LLM {
 	return &LLM{
 		app_ctx: ctx,
 
-		n_predict: 128,
-		n_ctx:     4096,
-		n_batch:   512,
+		n_predict: 512,
+		// TODO: now n_batch should be not less that n_ctx
+		// but should be possible to it in other way
+		n_ctx:   2048,
+		n_batch: 2048,
 
 		mu:          sync.Mutex{},
 		cancel_list: cl,
@@ -80,6 +82,8 @@ func (llm *LLM) loadModel(model_path string) error {
 	llm.model = model
 	llm.vocab = vocab
 
+	template := C.llama_model_chat_template(model, nil)
+	log.Printf("%s", C.GoString(template))
 	return nil
 }
 
@@ -123,7 +127,7 @@ func (llm *LLM) initilizeSampler() error {
 	return nil
 }
 
-func (llm *LLM) tokenizePromtp(prompt string) (int, []C.llama_token, error) {
+func (llm *LLM) tokenizePrompt(prompt string) (int, []C.llama_token, error) {
 	// find the number of tokens in the prompt
 	n_prompt := int(-C.llama_tokenize(llm.vocab, C.CString(prompt), C.int(len(prompt)), nil, 0, true, true))
 	prompt_tokens := make([]C.llama_token, n_prompt)
@@ -184,7 +188,7 @@ func (llm *LLM) Cancel(req_id string) {
 }
 
 func (llm *LLM) Proccess(ctx context.Context, prompt string, req string) (chan []byte, chan bool, error) {
-	n_prompt, prompt_tokens, err := llm.tokenizePromtp(prompt)
+	n_prompt, prompt_tokens, err := llm.tokenizePrompt(prompt)
 	if err != nil {
 		return nil, nil, err
 	}
