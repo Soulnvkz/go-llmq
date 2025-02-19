@@ -48,7 +48,7 @@ type WSCompletions struct {
 }
 
 const (
-	PING_DELAY = 5000 * time.Minute
+	PING_DELAY = 120 * time.Second
 )
 
 func NewWSCompletions(
@@ -76,15 +76,19 @@ func (socket *WSCompletions) Close() {
 func (socket *WSCompletions) HandleMessages() {
 loop:
 	for {
-		out := socket.readNext()
+		buff := socket.readNext()
+		if buff != nil {
+			go socket.handleMessage(buff)
+		}
+
 		select {
 		case <-socket.ctx.Done():
 			break loop
-		case message := <-out:
-			go socket.handleMessage(message)
 		case <-socket.pingTicker.C:
 			log.Info().Printf("no pings...closing connections")
 			socket.cancel()
+		default:
+			continue loop
 		}
 	}
 }
@@ -220,7 +224,7 @@ func (socket *WSCompletions) writePong() error {
 		return err
 	}
 
-	return socket.c.WriteMessage(websocket.TextMessage, data)
+	return socket.writeNext(data)
 }
 
 func (socket *WSCompletions) writeCompletions(buff []byte) error {
@@ -234,7 +238,7 @@ func (socket *WSCompletions) writeCompletions(buff []byte) error {
 		return err
 	}
 
-	return socket.c.WriteMessage(websocket.TextMessage, data)
+	return socket.writeNext(data)
 }
 
 func (socket *WSCompletions) writeQueueCompletions() error {
@@ -247,7 +251,7 @@ func (socket *WSCompletions) writeQueueCompletions() error {
 		return err
 	}
 
-	return socket.c.WriteMessage(websocket.TextMessage, data)
+	return socket.writeNext(data)
 }
 
 func (socket *WSCompletions) writeStartCompletions() error {
@@ -259,8 +263,7 @@ func (socket *WSCompletions) writeStartCompletions() error {
 		log.Error().Printf("failed to marshal message, %s", err)
 		return err
 	}
-
-	return socket.c.WriteMessage(websocket.TextMessage, data)
+	return socket.writeNext(data)
 }
 
 func (socket *WSCompletions) writeEndCompletions() error {
@@ -273,7 +276,7 @@ func (socket *WSCompletions) writeEndCompletions() error {
 		return err
 	}
 
-	return socket.c.WriteMessage(websocket.TextMessage, data)
+	return socket.writeNext(data)
 }
 
 func (socket *WSCompletions) writeError(err error) error {
@@ -287,27 +290,28 @@ func (socket *WSCompletions) writeError(err error) error {
 		return err
 	}
 
-	return socket.c.WriteMessage(websocket.TextMessage, data)
+	return socket.writeNext(data)
 }
 
-func (socket *WSCompletions) readNext() chan []byte {
-	buff := make(chan []byte)
+func (socket *WSCompletions) readNext() []byte {
+	mt, buff, err := socket.c.ReadMessage()
 
-	go func() {
-		mt, message, err := socket.c.ReadMessage()
-		if err != nil {
-			log.Error().Println("reading message error:", err)
-			socket.cancel()
-			return
-		}
-		if mt == websocket.CloseMessage {
-			log.Error().Print("requesting close connection...")
-			socket.cancel()
-			return
-		}
-
-		buff <- message
-	}()
+	if err != nil {
+		log.Error().Println("reading message error:", err)
+		socket.cancel()
+		return nil
+	}
+	if mt == websocket.CloseMessage {
+		log.Info().Print("requested close connection...")
+		socket.cancel()
+		return nil
+	}
 
 	return buff
+}
+
+func (socket *WSCompletions) writeNext(data []byte) error {
+	socket.mu.Lock()
+	defer socket.mu.Unlock()
+	return socket.c.WriteMessage(websocket.TextMessage, data)
 }
