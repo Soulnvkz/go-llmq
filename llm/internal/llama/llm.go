@@ -194,6 +194,8 @@ func (llm *LLM) Proccess(ctx context.Context, prompt string, req string) (chan [
 
 	n_prompt, prompt_tokens, err := llm.tokenizePrompt(prompt)
 	if err != nil {
+		C.llama_sampler_free(smpl)
+		C.llama_free(llmctx)
 		return nil, nil, err
 	}
 
@@ -209,6 +211,8 @@ func (llm *LLM) Proccess(ctx context.Context, prompt string, req string) (chan [
 		})
 	} else {
 		log.Printf("ProccessNext: ctx %s already exists", req)
+		C.llama_sampler_free(smpl)
+		C.llama_free(llmctx)
 		return nil, nil, errors.New("request has canceled already")
 	}
 
@@ -219,6 +223,7 @@ func (llm *LLM) Proccess(ctx context.Context, prompt string, req string) (chan [
 	n_pos := 0
 	stop := make(chan bool)
 	next := make(chan []byte)
+
 	go func(llmctx *C.struct_llama_context, smpl *C.struct_llama_sampler) {
 		defer func() {
 			C.llama_sampler_free(smpl)
