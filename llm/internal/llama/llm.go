@@ -32,8 +32,6 @@ type LLM struct {
 
 	model     *C.struct_llama_model
 	vocab     *C.struct_llama_vocab
-	ctx       *C.struct_llama_context
-	smpl      *C.struct_llama_sampler
 	n_predict int
 	n_ctx     int
 	n_batch   int
@@ -87,7 +85,7 @@ func (llm *LLM) loadModel(model_path string) error {
 	return nil
 }
 
-func (llm *LLM) initilizeContext() error {
+func (llm *LLM) initilizeContext() (*C.struct_llama_context, error) {
 	// initialize the context
 
 	ctx_params := C.llama_context_default_params()
@@ -100,21 +98,19 @@ func (llm *LLM) initilizeContext() error {
 
 	ctx := C.llama_init_from_model(llm.model, ctx_params)
 	if ctx == nil {
-		return fmt.Errorf("can't initiliize context")
+		return nil, fmt.Errorf("can't initiliize context")
 	}
 
-	llm.ctx = ctx
-	return nil
+	return ctx, nil
 }
 
-func (llm *LLM) initilizeSampler() error {
-
+func (llm *LLM) initilizeSampler() (*C.struct_llama_sampler, error) {
 	sparams := C.llama_sampler_chain_default_params()
 	sparams.no_perf = false
 
 	smpl := C.llama_sampler_chain_init(sparams)
 	if smpl == nil {
-		return fmt.Errorf("can't initiliize sampler")
+		return nil, fmt.Errorf("can't initiliize sampler")
 	}
 
 	seed := rand.Uint32()
@@ -123,8 +119,7 @@ func (llm *LLM) initilizeSampler() error {
 	C.llama_sampler_chain_add(smpl, C.llama_sampler_init_min_p(C.float(0.05), C.size_t(1)))
 	C.llama_sampler_chain_add(smpl, C.llama_sampler_init_dist(C.uint32_t(seed)))
 
-	llm.smpl = smpl
-	return nil
+	return smpl, nil
 }
 
 func (llm *LLM) tokenizePrompt(prompt string) (int, []C.llama_token, error) {
@@ -145,26 +140,26 @@ func (llm *LLM) Initilize(model string) error {
 	if err != nil {
 		return err
 	}
-	err = llm.initilizeContext()
-	if err != nil {
-		return err
-	}
-	err = llm.initilizeSampler()
-	if err != nil {
-		return err
-	}
+	// err = llm.initilizeContext()
+	// if err != nil {
+	// 	return err
+	// }
+	// err = llm.initilizeSampler()
+	// if err != nil {
+	// 	return err
+	// }
 
 	return nil
 }
 
 func (llm *LLM) Clean() error {
 
-	C.llama_sampler_free(llm.smpl)
-	C.llama_free(llm.ctx)
+	// C.llama_sampler_free(llm.smpl)
+	// C.llama_free(llm.ctx)
 	C.llama_model_free(llm.model)
 
-	llm.smpl = nil
-	llm.ctx = nil
+	// llm.smpl = nil
+	// llm.ctx = nil
 	llm.model = nil
 
 	return nil
@@ -188,6 +183,15 @@ func (llm *LLM) Cancel(req_id string) {
 }
 
 func (llm *LLM) Proccess(ctx context.Context, prompt string, req string) (chan []byte, chan bool, error) {
+	llmctx, err := llm.initilizeContext()
+	if err != nil {
+		return nil, nil, err
+	}
+	smpl, err := llm.initilizeSampler()
+	if err != nil {
+		return nil, nil, err
+	}
+
 	n_prompt, prompt_tokens, err := llm.tokenizePrompt(prompt)
 	if err != nil {
 		return nil, nil, err
@@ -215,7 +219,11 @@ func (llm *LLM) Proccess(ctx context.Context, prompt string, req string) (chan [
 	n_pos := 0
 	stop := make(chan bool)
 	next := make(chan []byte)
-	go func() {
+	go func(llmctx *C.struct_llama_context, smpl *C.struct_llama_sampler) {
+		defer func() {
+			C.llama_sampler_free(smpl)
+			C.llama_free(llmctx)
+		}()
 	loop:
 		for {
 			select {
@@ -231,7 +239,7 @@ func (llm *LLM) Proccess(ctx context.Context, prompt string, req string) (chan [
 					break loop
 				}
 				// evaluate the current batch with the transformer model
-				if C.llama_decode(llm.ctx, batch) > 0 {
+				if C.llama_decode(llmctx, batch) > 0 {
 					log.Printf("failed to eval current batch")
 					stop <- true
 					break loop
@@ -240,7 +248,7 @@ func (llm *LLM) Proccess(ctx context.Context, prompt string, req string) (chan [
 				n_pos += int(batch.n_tokens)
 
 				// sample the next token
-				new_token_id = C.llama_sampler_sample(llm.smpl, llm.ctx, -1)
+				new_token_id = C.llama_sampler_sample(smpl, llmctx, -1)
 
 				// is it an end of generation?
 				if C.llama_vocab_is_eog(llm.vocab, new_token_id) {
@@ -263,7 +271,8 @@ func (llm *LLM) Proccess(ctx context.Context, prompt string, req string) (chan [
 				n_decode += 1
 			}
 		}
-	}()
+
+	}(llmctx, smpl)
 
 	return next, stop, nil
 }
