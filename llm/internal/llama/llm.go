@@ -30,8 +30,10 @@ type LLM struct {
 
 	cancel_list *utils.CancellationTokensCache
 
-	model     *C.struct_llama_model
-	vocab     *C.struct_llama_vocab
+	model *C.struct_llama_model
+	vocab *C.struct_llama_vocab
+	ctx   *C.struct_llama_context
+
 	n_predict int
 	n_ctx     int
 	n_batch   int
@@ -140,26 +142,20 @@ func (llm *LLM) Initilize(model string) error {
 	if err != nil {
 		return err
 	}
-	// err = llm.initilizeContext()
-	// if err != nil {
-	// 	return err
-	// }
-	// err = llm.initilizeSampler()
-	// if err != nil {
-	// 	return err
-	// }
+	ctx, err := llm.initilizeContext()
+	if err != nil {
+		return err
+	}
+	llm.ctx = ctx
 
 	return nil
 }
 
 func (llm *LLM) Clean() error {
-
-	// C.llama_sampler_free(llm.smpl)
-	// C.llama_free(llm.ctx)
+	C.llama_free(llm.ctx)
 	C.llama_model_free(llm.model)
 
-	// llm.smpl = nil
-	// llm.ctx = nil
+	llm.ctx = nil
 	llm.model = nil
 
 	return nil
@@ -183,10 +179,6 @@ func (llm *LLM) Cancel(req_id string) {
 }
 
 func (llm *LLM) Proccess(ctx context.Context, prompt string, req string) (chan []byte, chan bool, error) {
-	llmctx, err := llm.initilizeContext()
-	if err != nil {
-		return nil, nil, err
-	}
 	smpl, err := llm.initilizeSampler()
 	if err != nil {
 		return nil, nil, err
@@ -195,9 +187,10 @@ func (llm *LLM) Proccess(ctx context.Context, prompt string, req string) (chan [
 	n_prompt, prompt_tokens, err := llm.tokenizePrompt(prompt)
 	if err != nil {
 		C.llama_sampler_free(smpl)
-		C.llama_free(llmctx)
 		return nil, nil, err
 	}
+
+	C.llama_kv_cache_clear(llm.ctx)
 
 	_, ok := llm.cancel_list.Get(req)
 	var req_ctx context.Context
@@ -212,7 +205,6 @@ func (llm *LLM) Proccess(ctx context.Context, prompt string, req string) (chan [
 	} else {
 		log.Printf("ProccessNext: ctx %s already exists", req)
 		C.llama_sampler_free(smpl)
-		C.llama_free(llmctx)
 		return nil, nil, errors.New("request has canceled already")
 	}
 
@@ -224,10 +216,9 @@ func (llm *LLM) Proccess(ctx context.Context, prompt string, req string) (chan [
 	stop := make(chan bool)
 	next := make(chan []byte)
 
-	go func(llmctx *C.struct_llama_context, smpl *C.struct_llama_sampler) {
+	go func(smpl *C.struct_llama_sampler) {
 		defer func() {
 			C.llama_sampler_free(smpl)
-			C.llama_free(llmctx)
 		}()
 	loop:
 		for {
@@ -244,7 +235,7 @@ func (llm *LLM) Proccess(ctx context.Context, prompt string, req string) (chan [
 					break loop
 				}
 				// evaluate the current batch with the transformer model
-				if C.llama_decode(llmctx, batch) > 0 {
+				if C.llama_decode(llm.ctx, batch) > 0 {
 					log.Printf("failed to eval current batch")
 					stop <- true
 					break loop
@@ -253,7 +244,7 @@ func (llm *LLM) Proccess(ctx context.Context, prompt string, req string) (chan [
 				n_pos += int(batch.n_tokens)
 
 				// sample the next token
-				new_token_id = C.llama_sampler_sample(smpl, llmctx, -1)
+				new_token_id = C.llama_sampler_sample(smpl, llm.ctx, -1)
 
 				// is it an end of generation?
 				if C.llama_vocab_is_eog(llm.vocab, new_token_id) {
@@ -277,7 +268,7 @@ func (llm *LLM) Proccess(ctx context.Context, prompt string, req string) (chan [
 			}
 		}
 
-	}(llmctx, smpl)
+	}(smpl)
 
 	return next, stop, nil
 }

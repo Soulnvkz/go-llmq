@@ -18,10 +18,10 @@ function ChatContainer() {
             setQueue(true)
         },
         onStart() {
-            setQueue(false)
             setCurrent("")
         },
         onNext(next: string) {
+            setQueue(false)
             setCurrent(prev => prev + next)
         },
         onEnd() {

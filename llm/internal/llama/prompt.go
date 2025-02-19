@@ -46,8 +46,8 @@ func (p LLMPromptBuilder) Build(messages []domain.ChatMessage, next string) (str
 		}
 		log.Printf("l %d", l)
 
-		if l >= p.llm.n_ctx {
-			log.Printf("l %d > max %d, index %d, total %d", l, p.llm.n_ctx, i, len(messages))
+		if l >= (p.llm.n_ctx - p.llm.n_predict) {
+			log.Printf("l %d > max %d, index %d, total %d", l, p.llm.n_ctx-p.llm.n_predict, i, len(messages))
 			return string(buff), nil
 		}
 		buff = newbuff
