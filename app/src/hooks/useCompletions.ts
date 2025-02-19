@@ -1,6 +1,6 @@
 import { useCallback, useContext, useEffect } from "react";
 
-import { CancelMessage, CompletitionsEnd, CompletitionsMessage, CompletitionsNext, CompletitionsQueue, CompletitionsStart, useWebSocket, WSMessage } from "./useWebSocket";
+import { CancelMessage, CompletitionsEnd, CompletitionsMessage, CompletitionsNext, CompletitionsQueue, CompletitionsStart, WSMessage } from "./useWebSocket";
 import { WSContext } from "../state/WSContext";
 
 interface Props {
@@ -19,26 +19,24 @@ export function useCompletions({
     const { send, addOnMessageCallback, removeOnMessageCallback } = useContext(WSContext)
 
     const onMessage = useCallback(function onMessage(message: WSMessage) {
-            console.log("!!!")
-            switch (message.message_type) {
-                case CompletitionsQueue:
-                    onQueue()
-                    break
-                case CompletitionsStart:
-                    onStart()
-                    break
-                case CompletitionsNext:
-                    onNext(message.content!)
-                    break
-                case CompletitionsEnd:
-                    onEnd()
-                    break
-                default:
-                    console.info("unsupported message type", message.message_type)
-                    break
-            }
+        switch (message.message_type) {
+            case CompletitionsQueue:
+                onQueue()
+                break
+            case CompletitionsStart:
+                onStart()
+                break
+            case CompletitionsNext:
+                onNext(message.content!)
+                break
+            case CompletitionsEnd:
+                onEnd()
+                break
+            default:
+                console.info("unsupported message type", message.message_type)
+                break
         }
-    , [])
+    }, [])
 
     useEffect(() => {
         addOnMessageCallback(onMessage)

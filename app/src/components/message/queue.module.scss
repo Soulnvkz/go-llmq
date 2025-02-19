@@ -1,0 +1,45 @@
+.thinkingIndicator {
+    padding: 12px 24px;
+    border-radius: 15px;
+    margin: 5px 0;
+    background-color: var(--msg-incoming-bg);
+    color: var(--msg-incoming-text);
+    align-self: flex-start;
+}
+
+.dotFlashing {
+    display: inline-block;
+    position: relative;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background-color: #999;
+    animation: dotFlashing 1s infinite linear;
+}
+
+.dotFlashing::before, .dotFlashing::after {
+    content: '';
+    position: absolute;
+    display: inline-block;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background-color: #999;
+}
+
+.dotFlashing::before {
+    left: -12px;
+    animation: dotFlashing 1s infinite linear;
+    animation-delay: 0s;
+}
+
+.dotFlashing::after {
+    left: 12px;
+    animation: dotFlashing 1s infinite linear;
+    animation-delay: 0.2s;
+}
+
+@keyframes dotFlashing {
+    0% { background-color: #999; }
+    50%, 100% { background-color: #ccc; }
+} 

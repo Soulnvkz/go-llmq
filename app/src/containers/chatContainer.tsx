@@ -8,15 +8,17 @@ function ChatContainer() {
     const index = useRef(0)
     const [messages, setMessages] = useState<Message[]>([])
     const [current, setCurrent] = useState("")
+    const [isQueue, setQueue] = useState(false)
 
     const currentRef = useRef<HTMLDivElement>(null)
     const inputRef = useRef<HTMLInputElement>(null)
 
     const { cancel, request } = useCompletions({
         onQueue() {
-            setCurrent("queue...")
+            setQueue(true)
         },
         onStart() {
+            setQueue(false)
             setCurrent("")
         },
         onNext(next: string) {
@@ -36,28 +38,41 @@ function ChatContainer() {
         },
     })
 
+    const isCanCancel = current.length > 0 || isQueue
+
+    function onCancel(){
+        cancel()
+
+        setCurrent("")
+        setQueue(false)
+    }
+
+    function onSend() {
+        const message = inputRef.current?.value ?? ""
+        if (message.length === 0) {
+            return;
+        }
+
+        index.current = index.current + 1;
+        inputRef.current!.value = ""
+        setMessages(prev => [...prev, {
+            id: index.current,
+            isUser: true,
+            text: message
+        }]);
+        request(message)
+    }
+
     return (<Chat
         chatName="Text Chat #1"
         messages={messages}
         current={current}
         inputRef={inputRef}
         currentRef={currentRef}
-        onCancel={() => { cancel() }}
-        onSend={() => {
-            const message = inputRef.current?.value ?? ""
-            if (message.length === 0) {
-                return;
-            }
-
-            index.current = index.current + 1;
-            inputRef.current!.value = ""
-            setMessages(prev => [...prev, {
-                id: index.current,
-                isUser: true,
-                text: message
-            }]);
-            request(message)
-        }}
+        isQueue={isQueue}
+        isCanCancel={isCanCancel}
+        onCancel={onCancel}
+        onSend={onSend}
     />)
 }
 
