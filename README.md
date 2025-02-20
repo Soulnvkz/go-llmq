@@ -9,6 +9,7 @@ At the moment, each chat session is unique, and its context exists only in the s
 The LLM leverages llama.cpp through bindings. This approach was primarily chosen for research purposes to gain a deeper understanding of the internal workings of LLM implementations.
 
 ## TODO
+- [ ] Apply template to chat messages from llm model if possible
 - [ ] Implement chat context persistence using a database  
 - [ ] Add Create/Delete/Restore functionality for chats using a unique ID from long-term storage  
 - [ ] Enable real-time editing of LLM parameters (system prompt, template, temperature, etc.)  
