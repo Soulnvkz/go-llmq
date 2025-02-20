@@ -13,7 +13,7 @@ The LLM leverages llama.cpp through bindings. This approach was primarily chosen
 *Demonstration of the queue in action with a single running LLM instance. When two clients are connected, one of them will wait for their turn.*
 
 ## TODO
-- [ ] Apply template to chat messages from llm model if possible
+- [x] Apply template to chat messages from llm model if possible
 - [ ] Implement chat context persistence using a database  
 - [ ] Add Create/Delete/Restore functionality for chats using a unique ID from long-term storage  
 - [ ] Enable real-time editing of LLM parameters (system prompt, template, temperature, etc.)  
