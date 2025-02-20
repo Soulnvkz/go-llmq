@@ -1,8 +1,8 @@
 package llama
 
 import (
+	"errors"
 	"fmt"
-	"log"
 
 	"github.com/soulnvkz/mq/domain"
 )
@@ -21,10 +21,34 @@ func NewPromptBuilder(llm *LLM) LLMPromptBuilder {
 	}
 }
 
-func (p LLMPromptBuilder) Build(messages []domain.ChatMessage, next string) (string, error) {
-	nextm := fmt.Sprintf("<|start_header_id|>user<|end_header_id|>%s<|eot_id|>\n", next)
-	buff := make([]byte, len(nextm))
-	copy(buff, []byte(nextm))
+func (b LLMPromptBuilder) promptFromModelChatTemplate(messages []domain.ChatMessage) (string, error) {
+	i := 0
+	for {
+		p, err := b.llm.ApplyChatTemplate(messages)
+		if err != nil {
+			return "", err
+		}
+		l, _, err := b.llm.tokenizePrompt(p)
+		if err != nil {
+			return "", err
+		}
+		if l <= (b.llm.n_ctx - b.llm.n_predict) {
+			return p, nil
+		}
+
+		i++
+		if len(messages) == 0 {
+			return "", errors.New("")
+		}
+
+		messages = messages[1:]
+	}
+}
+
+func (b LLMPromptBuilder) promptFromDefaultTemplate(messages []domain.ChatMessage) (string, error) {
+	assistant := "<|start_header_id|>assistant<|end_header_id|>"
+	buff := make([]byte, len(assistant))
+	copy(buff, []byte(assistant))
 
 	for i := len(messages) - 1; i >= 0; i-- {
 		var m string
@@ -37,21 +61,31 @@ func (p LLMPromptBuilder) Build(messages []domain.ChatMessage, next string) (str
 			continue
 		}
 
-		newbuff := make([]byte, len(buff)+len(m))
+		newbuff := make([]byte, len(m)+len(buff))
 		copy(newbuff, []byte(m))
 		copy(newbuff[len(m):], buff)
-		l, _, err := p.llm.tokenizePrompt(string(newbuff))
+		l, _, err := b.llm.tokenizePrompt(string(newbuff))
 		if err != nil {
 			return "", err
 		}
-		log.Printf("l %d", l)
 
-		if l >= (p.llm.n_ctx - p.llm.n_predict) {
-			log.Printf("l %d > max %d, index %d, total %d", l, p.llm.n_ctx-p.llm.n_predict, i, len(messages))
+		if l >= (b.llm.n_ctx - b.llm.n_predict) {
 			return string(buff), nil
 		}
 		buff = newbuff
 	}
 
 	return string(buff), nil
+}
+
+func (b LLMPromptBuilder) Build(messages []domain.ChatMessage, next string) (string, error) {
+	messages = append(messages, domain.ChatMessage{
+		Role:    "user",
+		Content: next,
+	})
+	if len(b.llm.model_chat_template) > 0 {
+		return b.promptFromModelChatTemplate(messages)
+	} else {
+		return b.promptFromDefaultTemplate(messages)
+	}
 }

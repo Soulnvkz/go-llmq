@@ -4,6 +4,7 @@ package llama
 #cgo CFLAGS: -I${SRCDIR}/../../deps/llama.cpp/ggml/include -I${SRCDIR}/../../deps/llama.cpp/include
 #cgo LDFLAGS: -L${SRCDIR}/../../deps/llama.cpp/build/bin -lllama -lggml -lstdc++ -ldl -lm
 #include "llama.h"
+#include <stdlib.h>
 */
 import "C"
 
@@ -18,6 +19,7 @@ import (
 	"unsafe"
 
 	"github.com/soulnvkz/llm/internal/utils"
+	"github.com/soulnvkz/mq/domain"
 )
 
 type Consumer interface {
@@ -33,6 +35,8 @@ type LLM struct {
 	model *C.struct_llama_model
 	vocab *C.struct_llama_vocab
 	ctx   *C.struct_llama_context
+
+	model_chat_template string
 
 	n_predict int
 	n_ctx     int
@@ -83,7 +87,10 @@ func (llm *LLM) loadModel(model_path string) error {
 	llm.vocab = vocab
 
 	template := C.llama_model_chat_template(model, nil)
-	log.Printf("%s", C.GoString(template))
+	if template != nil {
+		llm.model_chat_template = C.GoString(template)
+	}
+
 	return nil
 }
 
@@ -271,4 +278,55 @@ func (llm *LLM) Proccess(ctx context.Context, prompt string, req string) (chan [
 	}(smpl)
 
 	return next, stop, nil
+}
+
+func (llm *LLM) ApplyChatTemplate(messages []domain.ChatMessage) (string, error) {
+	llama_messages := make([]C.llama_chat_message, len(messages))
+	modelTemplateC := C.CString(llm.model_chat_template)
+
+	defer func() {
+		for _, lm := range llama_messages {
+			C.free(unsafe.Pointer(lm.role))
+			C.free(unsafe.Pointer(lm.content))
+		}
+		C.free(unsafe.Pointer(modelTemplateC))
+	}()
+
+	for i := 0; i < len(llama_messages); i++ {
+		llama_messages[i] = C.llama_chat_message{
+			role:    C.CString(messages[i].Role),
+			content: C.CString(messages[i].Content),
+		}
+	}
+
+	buff := make([]C.char, llm.n_ctx*2)
+
+	llama_messages_ptr := (*C.llama_chat_message)(unsafe.Pointer(&llama_messages[0]))
+	buff_ptr := (*C.char)(unsafe.Pointer(&buff[0]))
+
+	new_len := C.llama_chat_apply_template(
+		modelTemplateC,
+		llama_messages_ptr,
+		C.size_t(len(llama_messages)),
+		C.bool(true),
+		buff_ptr,
+		C.int(len(buff)))
+
+	if int(new_len) > len(buff) {
+		buff = make([]C.char, new_len)
+		buff_ptr = (*C.char)(unsafe.Pointer(&buff[0]))
+		new_len = C.llama_chat_apply_template(
+			modelTemplateC,
+			llama_messages_ptr,
+			C.size_t(len(llama_messages)),
+			true,
+			buff_ptr,
+			C.int(len(buff)))
+	}
+
+	if int(new_len) < 0 {
+		return "", errors.New("failed to apply the chat template")
+	}
+
+	return C.GoString(buff_ptr), nil
 }
