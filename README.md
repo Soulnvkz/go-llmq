@@ -8,6 +8,10 @@ The client interface is a React application that currently operates via WebSocke
 At the moment, each chat session is unique, and its context exists only in the server's memory.
 The LLM leverages llama.cpp through bindings. This approach was primarily chosen for research purposes to gain a deeper understanding of the internal workings of LLM implementations.
 
+![demo](examples/1.jpg)
+
+*Demonstration of the queue in action with a single running LLM instance. When two clients are connected, one of them will wait for their turn.*
+
 ## TODO
 - [ ] Apply template to chat messages from llm model if possible
 - [ ] Implement chat context persistence using a database  
