@@ -64,6 +64,10 @@ Open `http://localhost:5000` in your browser
 
 ---
 
+## Credits 
+
+- [llama.cpp](https://github.com/ggml-org/llama.cpp)
+
 ## License
 
 MIT License
